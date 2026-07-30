@@ -9,12 +9,14 @@ Requires Node.js 22. Run `npm install`, then `npm run dev`. Create the productio
 ## Use
 
 - **Set Position:** enter `latitude, longitude`, use the map center, click the map, or drag the tracker.
-- **Movement Simulator:** click several map points or paste one coordinate pair per line. Set speed and press Play.
-- **Tracker Appearance:** upload PNG, JPG, WEBP, or SVG (maximum 1.5 MB), then adjust size, opacity, ring, pulse, shadow, and directional rotation.
+- **Movement Simulator:** import a supported Google Maps route URL, enter start/destination addresses, click map points, or paste coordinate pairs. Road geometry is generated with the public OSRM service over OpenStreetMap data.
+- **Tracker Appearance:** choose one of 12 original SVG tracker icons or upload PNG, JPG, WEBP, or SVG (maximum 1.5 MB). Tracker assets never change the VECTOR brand assets.
 - **Presenter Mode:** press `P` or use the top-right button. `Space` plays/pauses, `R` restarts, `F` toggles fullscreen, `C` centers, `H` hides the interface, arrow keys seek, and `Escape` exits.
-- **Scenarios:** save locally, open any demo, or export/import a JSON file.
+- **Scenarios:** create unlimited custom scenarios, duplicate demos, rename/delete custom entries, or export/import a JSON file.
 
-Settings and scenarios persist in LocalStorage. The default map uses OpenStreetMap tiles and always displays contributor attribution. Satellite imagery is a prepared placeholder because a reliable production imagery provider normally requires its own key and usage agreement.
+Settings and scenarios use a versioned LocalStorage model. V1 data is migrated automatically, including uploaded tracker images. The default map uses OpenStreetMap tiles and always displays contributor attribution. Satellite imagery is a prepared placeholder because a reliable production imagery provider normally requires its own key and usage agreement.
+
+Google Maps URLs are only parsed for route endpoints already present in the URL. VECTOR does not scrape Google Maps or use proprietary Google route geometry. Supported formats include `google.com/maps/dir/...` and Maps URLs using `api=1`, `origin`, `destination`, and optional `waypoints`. Short `maps.app.goo.gl` links must be expanded in Google Maps before import.
 
 ## Deployment
 
