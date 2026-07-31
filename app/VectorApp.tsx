@@ -252,7 +252,8 @@ export default function VectorApp() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
-      if (e.shiftKey && ["1", "2", "3"].includes(e.key)) { e.preventDefault(); switchProfile(PROFILE_ORDER[Number(e.key) - 1]); }
+      const directProfileIndex = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
+      if (e.shiftKey && directProfileIndex >= 0) { e.preventDefault(); switchProfile(PROFILE_ORDER[directProfileIndex]); }
       else if (!e.shiftKey && e.key.toLowerCase() === "d") switchProfile(nextProfile(profileId));
       else if (e.code === "Space") { e.preventDefault(); setPlaying(v => !v); }
       else if (e.key.toLowerCase() === "r") { setProgress(0); setPlaying(false); }

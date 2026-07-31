@@ -43,6 +43,7 @@ test("profile changes invalidate map without resetting progress or simulation", 
   const component = fs.readFileSync(new URL("../app/VectorApp.tsx", import.meta.url), "utf8");
   assert.match(component, /\[presenter, profileId\]/);
   assert.match(component, /data-interface-profile=\{profileId\}/);
+  assert.match(component, /\["Digit1", "Digit2", "Digit3"\]/);
   assert.doesNotMatch(component, /switchProfile[^]*setProgress/);
   assert.doesNotMatch(component, /switchProfile[^]*setPlaying/);
 });
