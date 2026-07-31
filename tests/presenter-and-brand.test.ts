@@ -8,6 +8,7 @@ test("Presenter Mode preserves a full-size map and invalidates Leaflet", () => {
   assert.match(css, /\.presenter\{grid-template-rows:1fr!important/);
   assert.match(css, /\.presenter \.map-wrap,\.presenter \.map\{[^}]*height:100%!important/);
   assert.match(component, /invalidateSize/);
+  assert.match(component, /centerBeforeResize/);
   assert.match(component, /data-testid="map-container"/);
   assert.match(component, /data-presenter=\{presenter\}/);
   assert.match(css, /presenter\[data-interface-profile="trackpoint-2002"\] \.workspace\{[^}]*grid-template-columns:1fr!important/);

@@ -131,7 +131,12 @@ export default function VectorApp() {
   }, [position, scenario.route, scenario.appearance, scenario.status, angle, routeVisible]);
 
   useEffect(() => {
-    const refresh = () => map.current?.invalidateSize({ animate: false, pan: false });
+    const refresh = () => {
+      const instance = map.current; if (!instance) return;
+      const centerBeforeResize = instance.getCenter(); const zoomBeforeResize = instance.getZoom();
+      instance.invalidateSize({ animate: false, pan: true });
+      instance.setView(centerBeforeResize, zoomBeforeResize, { animate: false });
+    };
     const frame = requestAnimationFrame(refresh);
     const short = window.setTimeout(refresh, 80);
     const long = window.setTimeout(refresh, 280);
