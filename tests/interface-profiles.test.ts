@@ -44,6 +44,7 @@ test("profile changes invalidate map without resetting progress or simulation", 
   assert.match(component, /\[presenter, profileId\]/);
   assert.match(component, /data-interface-profile=\{profileId\}/);
   assert.match(component, /\["Digit1", "Digit2", "Digit3"\]/);
-  assert.doesNotMatch(component, /switchProfile[^]*setProgress/);
-  assert.doesNotMatch(component, /switchProfile[^]*setPlaying/);
+  const switchBlock = component.match(/const switchProfile = useCallback\([^]*?\}, \[\]\);/)?.[0] ?? "";
+  assert.ok(switchBlock);
+  assert.doesNotMatch(switchBlock, /setProgress|setPlaying|setScenario/);
 });
