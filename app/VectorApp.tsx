@@ -3,12 +3,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Map as LeafletMap, Marker, Polyline } from "leaflet";
-import type { Appearance, Coordinates, Scenario, StandardIcon, StoredAppData, TrackerStatus } from "./types";
+import type { Appearance, Coordinates, MobilePanelState, PresenterLock, Scenario, StandardIcon, StoredAppData, TrackerStatus } from "./types";
 import { DEFAULT_APPEARANCE, headingAtProgress, interpolatePosition, parseCoordinateLine, routeDistance, validateScenario } from "./utils";
 import { createCustomScenario, deleteScenario, duplicateScenario, migrateStoredData, serializeStoredData, STORAGE_V1_KEY, STORAGE_V2_KEY } from "./storage";
 import { parseGoogleMapsUrl } from "./routing/googleMapsUrlParser";
 import { generateRoute } from "./routing/routeProvider";
 import { INTERFACE_PROFILES, PROFILE_ORDER, isTypingTarget, nextProfile, normalizeProfile, type InterfaceProfileId } from "./interfaceProfiles";
+import { panelStateFromGesture, registerTripleTap, type Tap } from "./presenterGestures";
 
 const osloRoute = [{ lat: 59.9139, lng: 10.7522 }, { lat: 59.9162, lng: 10.7581 }, { lat: 59.9188, lng: 10.7644 }, { lat: 59.9222, lng: 10.7713 }];
 const demos: Scenario[] = [
@@ -36,6 +37,11 @@ export default function VectorApp() {
   const activeTabRef = useRef("position");
   const lockedRef = useRef(false);
   const hydrated = useRef(false);
+  const presenterRef = useRef(false);
+  const sheetDrag = useRef<{ y: number; at: number; state: MobilePanelState } | null>(null);
+  const presenterPointer = useRef<{ x: number; y: number; at: number } | null>(null);
+  const presenterTaps = useRef<Tap[]>([]);
+  const longPressTimer = useRef<number | null>(null);
   const [scenario, setScenario] = useState<Scenario>(demos[0]);
   const [scenarios, setScenarios] = useState<Scenario[]>(demos);
   const [activeTab, setActiveTab] = useState("position");
@@ -65,6 +71,14 @@ export default function VectorApp() {
   const [profileId, setProfileId] = useState<InterfaceProfileId>("vector");
   const [saveProfileWithScenario, setSaveProfileWithScenario] = useState(false);
   const [pendingProfile, setPendingProfile] = useState<InterfaceProfileId | null>(null);
+  const [panelState, setPanelState] = useState<MobilePanelState>("collapsed");
+  const [presenterLock, setPresenterLock] = useState<PresenterLock>("triple-confirm");
+  const [presenterZoomControls, setPresenterZoomControls] = useState(false);
+  const [presenterScale, setPresenterScale] = useState(false);
+  const [presenterAttribution, setPresenterAttribution] = useState(true);
+  const [presenterBranding, setPresenterBranding] = useState(true);
+  const [presenterClock, setPresenterClock] = useState(true);
+  const [exitPresenterOpen, setExitPresenterOpen] = useState(false);
   const profile = INTERFACE_PROFILES[profileId];
   const labels = profile.labels;
 
@@ -80,20 +94,23 @@ export default function VectorApp() {
 
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
   useEffect(() => { lockedRef.current = locked; }, [locked]);
+  useEffect(() => { presenterRef.current = presenter; }, [presenter]);
   useEffect(() => {
     const stored = migrateStoredData(localStorage.getItem(STORAGE_V2_KEY), localStorage.getItem(STORAGE_V1_KEY), demos);
     queueMicrotask(() => {
       setScenario(stored.current); setScenarios(stored.scenarios); setLight(stored.settings.light);
       setRouteVisible(stored.settings.routeVisible); setStatusVisible(stored.settings.statusVisible); setLocked(stored.settings.locked);
       setProfileId(normalizeProfile(stored.settings.interfaceProfile)); setSaveProfileWithScenario(stored.settings.saveProfileWithScenario);
+      setPresenterLock(stored.settings.presenterLock); setPresenterZoomControls(stored.settings.presenterZoomControls); setPresenterScale(stored.settings.presenterScale);
+      setPresenterAttribution(stored.settings.presenterAttribution); setPresenterBranding(stored.settings.presenterBranding); setPresenterClock(stored.settings.presenterClock);
       setRouteText(stored.current.route.map(p => `${p.lat}, ${p.lng}`).join("\n")); hydrated.current = true;
     });
   }, []);
   useEffect(() => {
     if (!hydrated.current) return;
-    const stored: StoredAppData = { version: 2, scenarios, activeScenarioId: scenario.id, current: scenario, settings: { light, routeVisible, statusVisible, locked, interfaceProfile: profileId, saveProfileWithScenario } };
+    const stored: StoredAppData = { version: 2, scenarios, activeScenarioId: scenario.id, current: scenario, settings: { light, routeVisible, statusVisible, locked, interfaceProfile: profileId, saveProfileWithScenario, presenterLock, presenterZoomControls, presenterScale, presenterAttribution, presenterBranding, presenterClock } };
     localStorage.setItem(STORAGE_V2_KEY, serializeStoredData(stored));
-  }, [scenario, scenarios, light, routeVisible, statusVisible, locked, profileId, saveProfileWithScenario]);
+  }, [scenario, scenarios, light, routeVisible, statusVisible, locked, profileId, saveProfileWithScenario, presenterLock, presenterZoomControls, presenterScale, presenterAttribution, presenterBranding, presenterClock]);
 
   useEffect(() => {
     if (!mapNode.current || map.current) return;
@@ -105,7 +122,8 @@ export default function VectorApp() {
       const mk = L.marker([scenario.position.lat, scenario.position.lng], { draggable: true, icon: trackerIcon(L, scenario.appearance, scenario.status, 0) }).addTo(m);
       mk.on("dragend", () => { const p = mk.getLatLng(); patch({ position: { lat: p.lat, lng: p.lng }, route: [], routeDistanceMeters: 0 }); setProgress(0); });
       m.on("click", e => {
-        if (lockedRef.current) return;
+        if (lockedRef.current || presenterRef.current) return;
+        if (window.matchMedia("(max-width: 800px)").matches && !isTypingTarget(document.activeElement)) setPanelState("collapsed");
         setScenario(s => activeTabRef.current === "movement"
           ? ({ ...s, route: [...s.route, { lat: e.latlng.lat, lng: e.latlng.lng }], routeDistanceMeters: undefined })
           : ({ ...s, position: { lat: e.latlng.lat, lng: e.latlng.lng }, route: [], routeDistanceMeters: 0 }));
@@ -142,7 +160,14 @@ export default function VectorApp() {
     const long = window.setTimeout(refresh, 280);
     document.addEventListener("fullscreenchange", refresh);
     return () => { cancelAnimationFrame(frame); clearTimeout(short); clearTimeout(long); document.removeEventListener("fullscreenchange", refresh); };
-  }, [presenter, profileId]);
+  }, [presenter, profileId, panelState]);
+
+  useEffect(() => {
+    const instance = map.current; if (!instance) return;
+    let scale: import("leaflet").Control.Scale | null = null;
+    if (presenter && presenterScale) import("leaflet").then(L => { if (map.current && presenterRef.current) scale = L.control.scale({ imperial: false, position: "bottomright" }).addTo(map.current); });
+    return () => { if (scale && instance) scale.remove(); };
+  }, [presenter, presenterScale]);
 
   const switchProfile = useCallback((id: InterfaceProfileId) => {
     setProfileId(id); setToast(INTERFACE_PROFILES[id].labels.profileSwitched);
@@ -252,6 +277,35 @@ export default function VectorApp() {
       applyRoute(resolved); notify("Straight-line fallback created");
     } catch { setError("Start and destination could not be resolved."); }
   };
+  const enterPresenter = useCallback(() => { setExitPresenterOpen(false); setPanelState("collapsed"); setPresenter(true); }, []);
+  const exitPresenter = useCallback(() => { setExitPresenterOpen(false); setPresenter(false); setPanelState("collapsed"); }, []);
+  const requestPresenterExit = useCallback(() => {
+    if (presenterLock === "triple-confirm") setExitPresenterOpen(true);
+    else exitPresenter();
+  }, [exitPresenter, presenterLock]);
+  const handleSheetPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    sheetDrag.current = { y: e.clientY, at: performance.now(), state: panelState }; e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const handleSheetPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const start = sheetDrag.current; sheetDrag.current = null; if (!start) return;
+    const elapsed = Math.max(1, performance.now() - start.at); const delta = e.clientY - start.y;
+    setPanelState(panelStateFromGesture(start.state, delta, delta / elapsed));
+  };
+  const cancelLongPress = () => { if (longPressTimer.current) window.clearTimeout(longPressTimer.current); longPressTimer.current = null; };
+  const handlePresenterPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!presenter) return; presenterPointer.current = { x: e.clientX, y: e.clientY, at: performance.now() };
+    cancelLongPress(); if (presenterLock === "long-press") longPressTimer.current = window.setTimeout(requestPresenterExit, 1500);
+  };
+  const handlePresenterPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const start = presenterPointer.current; if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) { presenterPointer.current = null; cancelLongPress(); }
+  };
+  const handlePresenterPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    cancelLongPress(); const start = presenterPointer.current; presenterPointer.current = null;
+    if (!start || !presenter || !["triple", "triple-confirm"].includes(presenterLock)) return;
+    if (performance.now() - start.at > 450 || Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) return;
+    const result = registerTripleTap(presenterTaps.current, { x: e.clientX, y: e.clientY, at: performance.now() }); presenterTaps.current = result.taps;
+    if (result.matched) requestPresenterExit();
+  };
   const fullscreen = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 
   useEffect(() => {
@@ -263,15 +317,15 @@ export default function VectorApp() {
       else if (e.code === "Space") { e.preventDefault(); setPlaying(v => !v); }
       else if (e.key.toLowerCase() === "r") { setProgress(0); setPlaying(false); }
       else if (e.key.toLowerCase() === "f") fullscreen();
-      else if (e.key.toLowerCase() === "p") setPresenter(v => !v);
+      else if (e.key.toLowerCase() === "p") presenter ? exitPresenter() : enterPresenter();
       else if (e.key.toLowerCase() === "c") center();
       else if (e.key.toLowerCase() === "h") setUiVisible(v => !v);
       else if (e.key === "ArrowLeft") setProgress(v => Math.max(0, v - .02));
       else if (e.key === "ArrowRight") setProgress(v => Math.min(1, v + .02));
-      else if (e.key === "Escape") setPresenter(false);
+      else if (e.key === "Escape") exitPresenter();
     };
     window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
-  }, [center, profileId, switchProfile]);
+  }, [center, enterPresenter, exitPresenter, presenter, profileId, switchProfile]);
   useEffect(() => {
     if (!presenter) return; let timer = window.setTimeout(() => setHideCursor(true), 2500);
     const move = () => { setHideCursor(false); clearTimeout(timer); timer = window.setTimeout(() => setHideCursor(true), 2500); };
@@ -280,33 +334,35 @@ export default function VectorApp() {
 
   return (
     <main className={`${light ? "light" : ""} ${presenter ? "presenter" : ""} ${!uiVisible ? "ui-hidden" : ""} ${hideCursor ? "hide-cursor" : ""}`} data-presenter={presenter} data-interface-profile={profileId}>
-      <header>
+      {!presenter && <header>
         <div className="brand"><img src={profile.logo} alt={profile.name} data-brand-logo /><div><b>{profile.name}</b><span>{profile.tagline}</span></div></div>
         <div className="header-state"><i className={statusTone} /> <b>{scenario.status.toUpperCase()}</b><span>{scenario.builtIn ? "DEMO SCENARIO" : "CUSTOM SCENARIO"}</span></div>
-        <div className="header-actions"><ProfilePicker value={profileId} onChange={switchProfile} /><button className="icon-button" onClick={() => setLight(v => !v)} title="Toggle theme">{light ? "◐" : "◑"}</button><button className="present-button" onClick={() => setPresenter(true)}>{labels.presenterMode} <kbd>P</kbd></button></div>
-      </header>
+        <div className="header-actions"><ProfilePicker value={profileId} onChange={switchProfile} /><button className="icon-button" onClick={() => setLight(v => !v)} title="Toggle theme">{light ? "◐" : "◑"}</button><button className="present-button" onClick={enterPresenter}>{labels.presenterMode} <kbd>P</kbd></button></div>
+      </header>}
 
       <section className="workspace">
-        <div className="map-wrap" data-testid="map-wrap">
+        <div className="map-wrap" data-testid="map-wrap" onPointerDown={handlePresenterPointerDown} onPointerMove={handlePresenterPointerMove} onPointerUp={handlePresenterPointerUp} onPointerCancel={() => { presenterPointer.current = null; cancelLongPress(); }}>
           <div ref={mapNode} className="map" aria-label="Interactive OpenStreetMap" data-testid="map-container" />
           <div className="map-shade" />
-          <div className="presenter-brand"><img src={profile.logo} alt="" /><div><b>{profile.name}</b><span>{profile.tagline}</span></div><aside><strong>{profile.presenterCode}</strong><time>{new Date().toLocaleString(profile.language === "Norsk" ? "nb-NO" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}</time><small>{profile.presenterNotice}</small></aside></div>
-          <div className="map-tools"><button onClick={() => map.current?.zoomIn()} title="Zoom in">＋</button><button onClick={() => map.current?.zoomOut()} title="Zoom out">−</button><button onClick={center} title="Center tracker">◎</button><button onClick={fullscreen} title="Fullscreen">⛶</button></div>
-          <div className="map-style"><span className="active">Street</span><span title="Prepared for a future imagery provider">Satellite*</span></div>
+          {presenter && presenterBranding && <div className="presenter-brand"><img src={profile.logo} alt="" /><div><b>{profile.name}</b><span>{profile.tagline}</span></div><aside><strong>{profile.presenterCode}</strong>{presenterClock && <time>{new Date().toLocaleString(profile.language === "Norsk" ? "nb-NO" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}</time>}<small>{profile.presenterNotice}</small></aside></div>}
+          {!presenter && <><div className="map-tools"><button onClick={() => map.current?.zoomIn()} title="Zoom in">＋</button><button onClick={() => map.current?.zoomOut()} title="Zoom out">−</button><button onClick={center} title="Center tracker">◎</button><button onClick={fullscreen} title="Fullscreen">⛶</button></div><div className="map-style"><span className="active">Street</span><span title="Prepared for a future imagery provider">Satellite*</span></div></>}
+          {presenter && presenterZoomControls && <div className="map-tools presenter-map-tools" aria-label="Presenter zoom controls"><button onClick={() => map.current?.zoomIn()} title="Zoom in">＋</button><button onClick={() => map.current?.zoomOut()} title="Zoom out">−</button></div>}
           {statusVisible && <aside className={`status-card ${statusTone}`} data-testid="tracker-status">
             <div className="eyebrow"><span><i /> {scenario.status}</span><span>GPS / LIVE</span></div><h2>{scenario.trackerName}</h2>
             <div className="coords">{position.lat.toFixed(6)}, {position.lng.toFixed(6)}</div>
             <div className="metrics"><div><span>Speed</span><b>{playing ? scenario.speed : 0}<small> km/h</small></b></div><div><span>Heading</span><b>{Math.round(angle)}°</b></div><div><span>Battery</span><b>{scenario.battery}<small>%</small></b></div><div><span>Signal</span><b>{scenario.signal}</b></div></div>
             <div className="updated"><span>Last update</span><b>{scenario.status === "Offline" ? "4 min ago" : updated < 2 ? "Just now" : `${updated}s ago`}</b></div>
           </aside>}
-          <div className="simulation-bar" data-testid="simulation-bar">
+          {!presenter && <div className="simulation-bar" data-testid="simulation-bar">
             <button onClick={() => { setPlaying(false); setProgress(0); }} title="Stop">■</button><button className="play" onClick={() => setPlaying(v => !v)} title="Play or pause">{playing ? "Ⅱ" : "▶"}</button>
             <button onClick={() => setProgress(v => Math.max(0, v - .02))}>−5s</button><input aria-label="Simulation progress" type="range" min="0" max="1" step=".001" value={progress} onChange={e => setProgress(+e.target.value)} />
             <time>{Math.round(progress * 100)}%</time><button onClick={() => setProgress(v => Math.min(1, v + .02))}>+5s</button><button className={scenario.loop ? "toggle-on" : ""} onClick={() => patch({ loop: !scenario.loop })}>↻ Loop</button>
-          </div>
+          </div>}
+          {presenter && presenterAttribution && <div className="presenter-attribution">© OpenStreetMap contributors</div>}
         </div>
 
-        <aside className="control-panel">
+        {!presenter && <aside className="control-panel" data-panel-state={panelState}>
+          <button className="sheet-handle" aria-label={`${labels.openControls}: ${panelState}`} onPointerDown={handleSheetPointerDown} onPointerUp={handleSheetPointerUp}><span /><b>{labels.openControls}</b><em>{panelState === "collapsed" ? "⌃" : panelState === "expanded" ? "⌄" : "↕"}</em></button>
           <nav aria-label="Control panel">{[["position", "⌖", labels.position], ["movement", "↝", labels.movement], ["appearance", "◇", labels.appearance], ["scenarios", "▣", labels.scenarios], ["settings", "⚙", labels.settings]].map(([id, icon, label]) => <button key={id} className={activeTab === id ? "active" : ""} onClick={() => setActiveTab(id)}><span>{icon}</span>{label}</button>)}</nav>
           <div className="panel-content">
             {activeTab === "position" && <>
@@ -361,16 +417,23 @@ export default function VectorApp() {
               <label>Tracker name<input value={scenario.trackerName} onChange={e => patch({ trackerName: e.target.value })} /></label><div className="two-col"><label>Device ID<input value={scenario.deviceId} onChange={e => patch({ deviceId: e.target.value })} /></label><label>Registration<input value={scenario.registration} onChange={e => patch({ registration: e.target.value })} /></label></div>
               <label>Vehicle<input value={scenario.vehicle} onChange={e => patch({ vehicle: e.target.value })} /></label><label>Note<textarea rows={3} value={scenario.note} onChange={e => patch({ note: e.target.value })} /></label>
               <label className="check"><input type="checkbox" checked={statusVisible} onChange={e => setStatusVisible(e.target.checked)} /> Show status in Presenter Mode</label><label className="check"><input type="checkbox" checked={locked} onChange={e => setLocked(e.target.checked)} /> Lock map during filming</label>
+              <SectionLabel>Presenter Mode</SectionLabel><label>{labels.presenterLock}<select value={presenterLock} onChange={e => setPresenterLock(e.target.value as PresenterLock)}><option value="off">Off</option><option value="triple">Triple tap to exit</option><option value="triple-confirm">Triple tap + confirmation</option><option value="long-press">Long press to exit</option></select></label>
+              <label className="check"><input type="checkbox" checked={presenterZoomControls} onChange={e => setPresenterZoomControls(e.target.checked)} /> Zoom controls</label>
+              <label className="check"><input type="checkbox" checked={presenterScale} onChange={e => setPresenterScale(e.target.checked)} /> Scale</label>
+              <label className="check"><input type="checkbox" checked={presenterAttribution} disabled /> Attribution (required for OpenStreetMap)</label>
+              <label className="check"><input type="checkbox" checked={statusVisible} onChange={e => setStatusVisible(e.target.checked)} /> Status panel</label>
+              <label className="check"><input type="checkbox" checked={presenterBranding} onChange={e => setPresenterBranding(e.target.checked)} /> Branding</label>
+              <label className="check"><input type="checkbox" checked={presenterClock} onChange={e => setPresenterClock(e.target.checked)} /> Clock</label>
               <SectionLabel>Interface Profiles</SectionLabel><ProfilePicker value={profileId} onChange={switchProfile} expanded /><label className="check"><input type="checkbox" checked={saveProfileWithScenario} onChange={e => setSaveProfileWithScenario(e.target.checked)} /> Save interface profile with scenario</label>
               <div className="privacy">{profile.name} is a fictional GPS simulation interface. No real devices are being tracked.</div><details><summary>Keyboard shortcuts</summary><p><kbd>D</kbd> Cycle profiles · <kbd>Shift+1/2/3</kbd> Select profile · <kbd>Space</kbd> Play/pause · <kbd>R</kbd> Restart · <kbd>F</kbd> Fullscreen · <kbd>P</kbd> Presenter · <kbd>C</kbd> Center · <kbd>H</kbd> Hide UI · <kbd>← →</kbd> Seek</p></details>
             </>}
             {error && <div className="error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
           </div><footer><span>{profile.shortName} / LOCAL</span><b>v2.1</b></footer>
-        </aside>
+        </aside>}
       </section>
-      {presenter && <div className="presenter-tools"><ProfilePicker value={profileId} onChange={switchProfile} /><button onClick={() => setLocked(v => !v)}>{locked ? "🔒 Locked" : "◇ Lock map"}</button><button onClick={() => setStatusVisible(v => !v)}>{statusVisible ? "Hide status" : "Show status"}</button><button onClick={() => setPresenter(false)}>{labels.exitPresenter} <kbd>Esc</kbd></button></div>}
       {newScenarioOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="new-scenario-title"><span>Custom scenario</span><h2 id="new-scenario-title">New Scenario</h2><p>Create a new scenario from the current map, route, tracker and status setup.</p><label>Scenario name<input autoFocus value={newScenarioName} onChange={e => setNewScenarioName(e.target.value)} onKeyDown={e => e.key === "Enter" && createScenario()} /></label><div className="split"><button className="secondary" onClick={() => setNewScenarioOpen(false)}>Cancel</button><button className="primary" onClick={createScenario}>Create Scenario</button></div></div></div>}
-      {toast && <div className="toast" role="status">{toast}</div>}
+      {toast && !presenter && <div className="toast" role="status">{toast}</div>}
+      {exitPresenterOpen && <div className="modal-backdrop presenter-exit-dialog"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="exit-presenter-title"><span>{profile.name}</span><h2 id="exit-presenter-title">{labels.exitPresenterPrompt}</h2><p>Your map, route and simulation state will be preserved.</p><div className="split"><button className="secondary" onClick={() => setExitPresenterOpen(false)}>Cancel</button><button className="primary" onClick={exitPresenter}>Exit</button></div></div></div>}
       {pendingProfile && <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true"><span>Interface Profile</span><h2>{INTERFACE_PROFILES[pendingProfile].name}</h2><p>This scenario was saved with the {INTERFACE_PROFILES[pendingProfile].name} interface ({INTERFACE_PROFILES[pendingProfile].language}). Switch the interface or keep the current profile?</p><div className="split"><button className="secondary" onClick={() => setPendingProfile(null)}>Keep current</button><button className="primary" onClick={() => { switchProfile(pendingProfile); setPendingProfile(null); }}>Switch profile</button></div></div></div>}
     </main>
   );

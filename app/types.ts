@@ -8,6 +8,8 @@ export type StandardIcon =
   | "phone" | "arrow" | "dot" | "magnetic-tracker" | "boat" | "bicycle";
 export type PulseIntensity = "Subtle" | "Normal" | "Strong";
 export type PulseSpeed = "Slow" | "Normal" | "Fast";
+export type MobilePanelState = "collapsed" | "half" | "expanded";
+export type PresenterLock = "off" | "triple" | "triple-confirm" | "long-press";
 export type Appearance = {
   size: number;
   opacity: number;
@@ -53,6 +55,12 @@ export type AppSettings = {
   locked: boolean;
   interfaceProfile: InterfaceProfileId;
   saveProfileWithScenario: boolean;
+  presenterLock: PresenterLock;
+  presenterZoomControls: boolean;
+  presenterScale: boolean;
+  presenterAttribution: boolean;
+  presenterBranding: boolean;
+  presenterClock: boolean;
 };
 export type StoredAppData = {
   version: 2;

@@ -6,7 +6,7 @@ export const STORAGE_V1_KEY = "vector-state-v1";
 export const STORAGE_V2_KEY = "vector-state-v2";
 
 export function migrateStoredData(rawV2: string | null, rawV1: string | null, demos: Scenario[]): StoredAppData {
-  const defaults: AppSettings = { light: false, routeVisible: true, statusVisible: true, locked: false, interfaceProfile: "vector", saveProfileWithScenario: false };
+  const defaults: AppSettings = { light: false, routeVisible: true, statusVisible: true, locked: false, interfaceProfile: "vector", saveProfileWithScenario: false, presenterLock: "triple-confirm", presenterZoomControls: false, presenterScale: false, presenterAttribution: true, presenterBranding: true, presenterClock: true };
   try {
     if (rawV2) {
       const parsed = JSON.parse(rawV2) as Partial<StoredAppData>;
