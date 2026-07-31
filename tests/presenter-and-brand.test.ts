@@ -12,7 +12,7 @@ test("Presenter Mode preserves a full-size map and invalidates Leaflet", () => {
   assert.match(component, /data-presenter=\{presenter\}/);
 });
 test("brand logo remains static and tracker upload is isolated", () => {
-  assert.match(component, /src="\/vector-logo\.svg"[^>]*data-brand-logo/);
+  assert.match(component, /src=\{profile\.logo\}[^>]*data-brand-logo/);
   assert.match(component, /appearance: \{ \.\.\.scenario\.appearance/);
   assert.doesNotMatch(component, /src=\{scenario\.appearance\.customIcon\}[^]*data-brand-logo/);
   assert.match(component, /Remove Uploaded Icon/);

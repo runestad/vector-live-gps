@@ -1,11 +1,12 @@
 import type { AppSettings, Scenario, StoredAppData } from "./types";
 import { normalizeScenario } from "./utils";
+import { normalizeProfile } from "./interfaceProfiles";
 
 export const STORAGE_V1_KEY = "vector-state-v1";
 export const STORAGE_V2_KEY = "vector-state-v2";
 
 export function migrateStoredData(rawV2: string | null, rawV1: string | null, demos: Scenario[]): StoredAppData {
-  const defaults: AppSettings = { light: false, routeVisible: true, statusVisible: true, locked: false };
+  const defaults: AppSettings = { light: false, routeVisible: true, statusVisible: true, locked: false, interfaceProfile: "vector", saveProfileWithScenario: false };
   try {
     if (rawV2) {
       const parsed = JSON.parse(rawV2) as Partial<StoredAppData>;
@@ -17,7 +18,8 @@ export function migrateStoredData(rawV2: string | null, rawV1: string | null, de
         current = { ...current, id: `recovered-${current.id}`, name: `${current.name} Recovered`, builtIn: false };
         custom.push(current);
       }
-      return { version: 2, scenarios: [...demos, ...custom], activeScenarioId: parsed.activeScenarioId ?? current.id, current, settings: { ...defaults, ...(parsed.settings ?? {}) } };
+      const settings = { ...defaults, ...(parsed.settings ?? {}), interfaceProfile: normalizeProfile(parsed.settings?.interfaceProfile) };
+      return { version: 2, scenarios: [...demos, ...custom], activeScenarioId: parsed.activeScenarioId ?? current.id, current, settings };
     }
   } catch {}
   try {

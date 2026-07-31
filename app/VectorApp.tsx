@@ -8,6 +8,7 @@ import { DEFAULT_APPEARANCE, headingAtProgress, interpolatePosition, parseCoordi
 import { createCustomScenario, deleteScenario, duplicateScenario, migrateStoredData, serializeStoredData, STORAGE_V1_KEY, STORAGE_V2_KEY } from "./storage";
 import { parseGoogleMapsUrl } from "./routing/googleMapsUrlParser";
 import { generateRoute } from "./routing/routeProvider";
+import { INTERFACE_PROFILES, PROFILE_ORDER, isTypingTarget, nextProfile, normalizeProfile, type InterfaceProfileId } from "./interfaceProfiles";
 
 const osloRoute = [{ lat: 59.9139, lng: 10.7522 }, { lat: 59.9162, lng: 10.7581 }, { lat: 59.9188, lng: 10.7644 }, { lat: 59.9222, lng: 10.7713 }];
 const demos: Scenario[] = [
@@ -61,6 +62,11 @@ export default function VectorApp() {
   const [routeVia, setRouteVia] = useState("");
   const [parsedRoute, setParsedRoute] = useState<Array<Coordinates | string>>([]);
   const [routing, setRouting] = useState(false);
+  const [profileId, setProfileId] = useState<InterfaceProfileId>("vector");
+  const [saveProfileWithScenario, setSaveProfileWithScenario] = useState(false);
+  const [pendingProfile, setPendingProfile] = useState<InterfaceProfileId | null>(null);
+  const profile = INTERFACE_PROFILES[profileId];
+  const labels = profile.labels;
 
   const position = useMemo(() => interpolatePosition(scenario.route.length ? scenario.route : [scenario.position], progress), [scenario.route, scenario.position, progress]);
   const angle = scenario.route.length > 1 ? headingAtProgress(scenario.route, progress) : 0;
@@ -79,14 +85,15 @@ export default function VectorApp() {
     queueMicrotask(() => {
       setScenario(stored.current); setScenarios(stored.scenarios); setLight(stored.settings.light);
       setRouteVisible(stored.settings.routeVisible); setStatusVisible(stored.settings.statusVisible); setLocked(stored.settings.locked);
+      setProfileId(normalizeProfile(stored.settings.interfaceProfile)); setSaveProfileWithScenario(stored.settings.saveProfileWithScenario);
       setRouteText(stored.current.route.map(p => `${p.lat}, ${p.lng}`).join("\n")); hydrated.current = true;
     });
   }, []);
   useEffect(() => {
     if (!hydrated.current) return;
-    const stored: StoredAppData = { version: 2, scenarios, activeScenarioId: scenario.id, current: scenario, settings: { light, routeVisible, statusVisible, locked } };
+    const stored: StoredAppData = { version: 2, scenarios, activeScenarioId: scenario.id, current: scenario, settings: { light, routeVisible, statusVisible, locked, interfaceProfile: profileId, saveProfileWithScenario } };
     localStorage.setItem(STORAGE_V2_KEY, serializeStoredData(stored));
-  }, [scenario, scenarios, light, routeVisible, statusVisible, locked]);
+  }, [scenario, scenarios, light, routeVisible, statusVisible, locked, profileId, saveProfileWithScenario]);
 
   useEffect(() => {
     if (!mapNode.current || map.current) return;
@@ -130,7 +137,12 @@ export default function VectorApp() {
     const long = window.setTimeout(refresh, 280);
     document.addEventListener("fullscreenchange", refresh);
     return () => { cancelAnimationFrame(frame); clearTimeout(short); clearTimeout(long); document.removeEventListener("fullscreenchange", refresh); };
-  }, [presenter]);
+  }, [presenter, profileId]);
+
+  const switchProfile = useCallback((id: InterfaceProfileId) => {
+    setProfileId(id); setToast(INTERFACE_PROFILES[id].labels.profileSwitched);
+    window.setTimeout(() => setToast(""), 2400);
+  }, []);
 
   useEffect(() => {
     if (!playing || scenario.route.length < 2) return;
@@ -170,20 +182,22 @@ export default function VectorApp() {
     const source = s.builtIn ? demos.find(d => d.id === s.id) ?? s : s;
     const copy = structuredClone(source); setScenario(copy); setProgress(0); setRouteText(copy.route.map(p => `${p.lat}, ${p.lng}`).join("\n"));
     window.setTimeout(() => map.current?.setView([copy.position.lat, copy.position.lng], copy.zoom), 20); notify(`Loaded “${copy.name}”`);
+    if (copy.interfaceProfile && copy.interfaceProfile !== profileId) setPendingProfile(copy.interfaceProfile);
   };
   const save = () => {
+    const savable = { ...scenario, interfaceProfile: saveProfileWithScenario ? profileId : undefined };
     if (scenario.builtIn) {
-      const custom = createCustomScenario(scenario, makeId(), `${scenario.name} Custom`);
+      const custom = createCustomScenario(savable, makeId(), `${scenario.name} Custom`);
       setScenario(custom); setScenarios(s => [...s, custom]); notify("Demo saved as a custom scenario"); return;
     }
-    setScenarios(s => s.some(item => item.id === scenario.id) ? s.map(item => item.id === scenario.id ? scenario : item) : [...s, scenario]);
+    setScenario(savable); setScenarios(s => s.some(item => item.id === scenario.id) ? s.map(item => item.id === scenario.id ? savable : item) : [...s, savable]);
     notify("Scenario saved locally");
   };
   const createScenario = () => {
-    const custom = createCustomScenario(scenario, makeId(), newScenarioName);
+    const custom = createCustomScenario({ ...scenario, interfaceProfile: saveProfileWithScenario ? profileId : undefined }, makeId(), newScenarioName);
     setScenarios(s => [...s, custom]); setScenario(custom); setNewScenarioOpen(false); setNewScenarioName("New Scenario"); notify("New scenario created");
   };
-  const duplicate = (s: Scenario) => { const copy = duplicateScenario(s, makeId()); setScenarios(items => [...items, copy]); setScenario(copy); notify("Scenario duplicated"); };
+  const duplicate = (s: Scenario) => { const copy = duplicateScenario({ ...s, interfaceProfile: saveProfileWithScenario ? profileId : undefined }, makeId()); setScenarios(items => [...items, copy]); setScenario(copy); notify("Scenario duplicated"); };
   const rename = (s: Scenario) => {
     if (s.builtIn) { notify("Duplicate the demo before renaming"); return; }
     const name = window.prompt("Scenario name", s.name)?.trim(); if (!name) return;
@@ -237,8 +251,10 @@ export default function VectorApp() {
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (/INPUT|TEXTAREA|SELECT/.test((e.target as HTMLElement).tagName)) return;
-      if (e.code === "Space") { e.preventDefault(); setPlaying(v => !v); }
+      if (isTypingTarget(e.target)) return;
+      if (e.shiftKey && ["1", "2", "3"].includes(e.key)) { e.preventDefault(); switchProfile(PROFILE_ORDER[Number(e.key) - 1]); }
+      else if (!e.shiftKey && e.key.toLowerCase() === "d") switchProfile(nextProfile(profileId));
+      else if (e.code === "Space") { e.preventDefault(); setPlaying(v => !v); }
       else if (e.key.toLowerCase() === "r") { setProgress(0); setPlaying(false); }
       else if (e.key.toLowerCase() === "f") fullscreen();
       else if (e.key.toLowerCase() === "p") setPresenter(v => !v);
@@ -249,7 +265,7 @@ export default function VectorApp() {
       else if (e.key === "Escape") setPresenter(false);
     };
     window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
-  }, [center]);
+  }, [center, profileId, switchProfile]);
   useEffect(() => {
     if (!presenter) return; let timer = window.setTimeout(() => setHideCursor(true), 2500);
     const move = () => { setHideCursor(false); clearTimeout(timer); timer = window.setTimeout(() => setHideCursor(true), 2500); };
@@ -257,17 +273,18 @@ export default function VectorApp() {
   }, [presenter]);
 
   return (
-    <main className={`${light ? "light" : ""} ${presenter ? "presenter" : ""} ${!uiVisible ? "ui-hidden" : ""} ${hideCursor ? "hide-cursor" : ""}`} data-presenter={presenter}>
+    <main className={`${light ? "light" : ""} ${presenter ? "presenter" : ""} ${!uiVisible ? "ui-hidden" : ""} ${hideCursor ? "hide-cursor" : ""}`} data-presenter={presenter} data-interface-profile={profileId}>
       <header>
-        <div className="brand"><img src="/vector-logo.svg" alt="VECTOR" data-brand-logo /><div><b>VECTOR</b><span>LIVE GPS TRACKING</span></div></div>
+        <div className="brand"><img src={profile.logo} alt={profile.name} data-brand-logo /><div><b>{profile.name}</b><span>{profile.tagline}</span></div></div>
         <div className="header-state"><i className={statusTone} /> <b>{scenario.status.toUpperCase()}</b><span>{scenario.builtIn ? "DEMO SCENARIO" : "CUSTOM SCENARIO"}</span></div>
-        <div className="header-actions"><button className="icon-button" onClick={() => setLight(v => !v)} title="Toggle theme">{light ? "◐" : "◑"}</button><button className="present-button" onClick={() => setPresenter(true)}>Presenter mode <kbd>P</kbd></button></div>
+        <div className="header-actions"><ProfilePicker value={profileId} onChange={switchProfile} /><button className="icon-button" onClick={() => setLight(v => !v)} title="Toggle theme">{light ? "◐" : "◑"}</button><button className="present-button" onClick={() => setPresenter(true)}>{labels.presenterMode} <kbd>P</kbd></button></div>
       </header>
 
       <section className="workspace">
         <div className="map-wrap" data-testid="map-wrap">
           <div ref={mapNode} className="map" aria-label="Interactive OpenStreetMap" data-testid="map-container" />
           <div className="map-shade" />
+          <div className="presenter-brand"><img src={profile.logo} alt="" /><div><b>{profile.name}</b><span>{profile.tagline}</span></div><aside><strong>{profile.presenterCode}</strong><time>{new Date().toLocaleString(profile.language === "Norsk" ? "nb-NO" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}</time><small>{profile.presenterNotice}</small></aside></div>
           <div className="map-tools"><button onClick={() => map.current?.zoomIn()} title="Zoom in">＋</button><button onClick={() => map.current?.zoomOut()} title="Zoom out">−</button><button onClick={center} title="Center tracker">◎</button><button onClick={fullscreen} title="Fullscreen">⛶</button></div>
           <div className="map-style"><span className="active">Street</span><span title="Prepared for a future imagery provider">Satellite*</span></div>
           {statusVisible && <aside className={`status-card ${statusTone}`} data-testid="tracker-status">
@@ -284,18 +301,18 @@ export default function VectorApp() {
         </div>
 
         <aside className="control-panel">
-          <nav aria-label="Control panel">{[["position", "⌖", "Position"], ["movement", "↝", "Movement"], ["appearance", "◇", "Appearance"], ["scenarios", "▣", "Scenarios"], ["settings", "⚙", "Settings"]].map(([id, icon, label]) => <button key={id} className={activeTab === id ? "active" : ""} onClick={() => setActiveTab(id)}><span>{icon}</span>{label}</button>)}</nav>
+          <nav aria-label="Control panel">{[["position", "⌖", labels.position], ["movement", "↝", labels.movement], ["appearance", "◇", labels.appearance], ["scenarios", "▣", labels.scenarios], ["settings", "⚙", labels.settings]].map(([id, icon, label]) => <button key={id} className={activeTab === id ? "active" : ""} onClick={() => setActiveTab(id)}><span>{icon}</span>{label}</button>)}</nav>
           <div className="panel-content">
             {activeTab === "position" && <>
-              <PanelTitle kicker="Tracker coordinates" title="Set Position" text="Enter coordinates or place the tracker directly on the map." />
+              <PanelTitle kicker="Tracker coordinates" title={labels.setPosition} text="Enter coordinates or place the tracker directly on the map." />
               <label>Latitude, longitude<input value={coordText} onChange={e => setCoordText(e.target.value)} placeholder="59.913900, 10.752200" /></label>
               <div className="split"><button className="secondary" onClick={() => navigator.clipboard?.readText().then(setCoordText)}>Paste</button><button className="secondary" onClick={() => { const c = map.current?.getCenter(); if (c) setCoordText(`${c.lat.toFixed(6)}, ${c.lng.toFixed(6)}`); }}>Use map center</button></div>
-              <button className="primary" onClick={setPositionFromText}>Update Position</button><div className="hint"><b>Map input enabled</b><span>Click anywhere or drag the tracker to place it.</span></div>
+              <button className="primary" onClick={setPositionFromText}>{labels.updatePosition}</button><div className="hint"><b>Map input enabled</b><span>Click anywhere or drag the tracker to place it.</span></div>
               <SectionLabel>Tracker status</SectionLabel><label>Status<select value={scenario.status} onChange={e => patch({ status: e.target.value as TrackerStatus })}>{statuses.map(s => <option key={s}>{s}</option>)}</select></label>
               <div className="two-col"><label>Battery %<input type="number" min="0" max="100" value={scenario.battery} onChange={e => patch({ battery: +e.target.value })} /></label><label>Signal<input value={scenario.signal} onChange={e => patch({ signal: e.target.value })} /></label></div>
             </>}
             {activeTab === "movement" && <>
-              <PanelTitle kicker="Route editor" title="Movement Simulator" text="Generate a road route, click map points, or paste coordinate pairs." />
+              <PanelTitle kicker="Route editor" title={labels.movementSimulator} text="Generate a road route, click map points, or paste coordinate pairs." />
               <details className="route-import" open><summary>Import Route Link</summary>
                 <label>Google Maps route URL<input value={routeLink} onChange={e => setRouteLink(e.target.value)} placeholder="https://www.google.com/maps/dir/..." /></label>
                 <button className="secondary full" onClick={inspectRouteLink}>Analyze Link</button>
@@ -312,7 +329,7 @@ export default function VectorApp() {
               <label className="check"><input type="checkbox" checked={routeVisible} onChange={e => setRouteVisible(e.target.checked)} /> Show route trace</label><label className="check"><input type="checkbox" checked={scenario.loop} onChange={e => patch({ loop: e.target.checked })} /> Loop continuously</label>
             </>}
             {activeTab === "appearance" && <>
-              <PanelTitle kicker="Visual identity" title="Tracker Appearance" text="The tracker asset is separate from the permanent VECTOR brand." />
+              <PanelTitle kicker="Visual identity" title={labels.trackerAppearance} text={`The tracker asset is separate from the permanent ${profile.name} brand.`} />
               <div className="appearance-preview"><TrackerPreview appearance={scenario.appearance} /></div>
               <SectionLabel>Standard icons</SectionLabel><div className="icon-grid">{iconChoices.map(icon => <button key={icon.id} className={scenario.appearance.standardIcon === icon.id && !scenario.appearance.customIcon ? "active" : ""} onClick={() => patchAppearance({ standardIcon: icon.id, customIcon: undefined })} title={icon.label}><span className="icon-mask" style={{ "--icon-url": `url(/tracker-icons/${icon.id}.svg)` } as React.CSSProperties} /><small>{icon.label}</small></button>)}</div>
               <label className="upload">Upload tracker icon<input type="file" accept=".png,.jpg,.jpeg,.webp,.svg" onChange={e => uploadIcon(e.target.files?.[0])} /></label>
@@ -329,7 +346,7 @@ export default function VectorApp() {
             </>}
             {activeTab === "scenarios" && <>
               <PanelTitle kicker="Local library" title="Scenarios" text="Built-in demos stay pristine. Custom scenarios are saved only in this browser." />
-              <button className="primary new-scenario" onClick={() => setNewScenarioOpen(true)}>＋ New Scenario</button><button className="secondary full" onClick={save}>Save Active Scenario</button>
+              <button className="primary new-scenario" onClick={() => setNewScenarioOpen(true)}>＋ {labels.newScenario}</button><button className="secondary full" onClick={save}>{labels.saveScenario}</button>
               <div className="split"><button className="secondary" onClick={exportScenario}>Export JSON</button><label className="secondary file-button">Import JSON<input type="file" accept=".json" onChange={e => importScenario(e.target.files?.[0])} /></label></div>
               <div className="scenario-list">{scenarios.map(s => <div className={`scenario-row ${scenario.id === s.id ? "active" : ""}`} key={s.id}><button className="scenario-main" onClick={() => load(s)}><span className={`scenario-dot ${s.status.toLowerCase().replaceAll(" ", "-")}`} /><span><b>{s.name}</b><small>{s.builtIn ? "Demo" : "Custom"} · {s.trackerName}</small></span><em>›</em></button><div className="scenario-actions"><button onClick={() => duplicate(s)}>Duplicate</button>{!s.builtIn && <><button onClick={() => rename(s)}>Rename</button><button onClick={() => removeScenario(s)}>Delete</button></>}</div></div>)}</div>
             </>}
@@ -338,21 +355,26 @@ export default function VectorApp() {
               <label>Tracker name<input value={scenario.trackerName} onChange={e => patch({ trackerName: e.target.value })} /></label><div className="two-col"><label>Device ID<input value={scenario.deviceId} onChange={e => patch({ deviceId: e.target.value })} /></label><label>Registration<input value={scenario.registration} onChange={e => patch({ registration: e.target.value })} /></label></div>
               <label>Vehicle<input value={scenario.vehicle} onChange={e => patch({ vehicle: e.target.value })} /></label><label>Note<textarea rows={3} value={scenario.note} onChange={e => patch({ note: e.target.value })} /></label>
               <label className="check"><input type="checkbox" checked={statusVisible} onChange={e => setStatusVisible(e.target.checked)} /> Show status in Presenter Mode</label><label className="check"><input type="checkbox" checked={locked} onChange={e => setLocked(e.target.checked)} /> Lock map during filming</label>
-              <div className="privacy">VECTOR is a fictional GPS simulation interface. No real devices are being tracked.</div><details><summary>Keyboard shortcuts</summary><p><kbd>Space</kbd> Play/pause · <kbd>R</kbd> Restart · <kbd>F</kbd> Fullscreen · <kbd>P</kbd> Presenter · <kbd>C</kbd> Center · <kbd>H</kbd> Hide UI · <kbd>← →</kbd> Seek</p></details>
+              <SectionLabel>Interface Profiles</SectionLabel><ProfilePicker value={profileId} onChange={switchProfile} expanded /><label className="check"><input type="checkbox" checked={saveProfileWithScenario} onChange={e => setSaveProfileWithScenario(e.target.checked)} /> Save interface profile with scenario</label>
+              <div className="privacy">{profile.name} is a fictional GPS simulation interface. No real devices are being tracked.</div><details><summary>Keyboard shortcuts</summary><p><kbd>D</kbd> Cycle profiles · <kbd>Shift+1/2/3</kbd> Select profile · <kbd>Space</kbd> Play/pause · <kbd>R</kbd> Restart · <kbd>F</kbd> Fullscreen · <kbd>P</kbd> Presenter · <kbd>C</kbd> Center · <kbd>H</kbd> Hide UI · <kbd>← →</kbd> Seek</p></details>
             </>}
             {error && <div className="error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
-          </div><footer><span>VECTOR / LOCAL</span><b>v2.0</b></footer>
+          </div><footer><span>{profile.shortName} / LOCAL</span><b>v2.1</b></footer>
         </aside>
       </section>
-      {presenter && <div className="presenter-tools"><button onClick={() => setLocked(v => !v)}>{locked ? "🔒 Locked" : "◇ Lock map"}</button><button onClick={() => setStatusVisible(v => !v)}>{statusVisible ? "Hide status" : "Show status"}</button><button onClick={() => setPresenter(false)}>Exit presenter <kbd>Esc</kbd></button></div>}
+      {presenter && <div className="presenter-tools"><ProfilePicker value={profileId} onChange={switchProfile} /><button onClick={() => setLocked(v => !v)}>{locked ? "🔒 Locked" : "◇ Lock map"}</button><button onClick={() => setStatusVisible(v => !v)}>{statusVisible ? "Hide status" : "Show status"}</button><button onClick={() => setPresenter(false)}>{labels.exitPresenter} <kbd>Esc</kbd></button></div>}
       {newScenarioOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="new-scenario-title"><span>Custom scenario</span><h2 id="new-scenario-title">New Scenario</h2><p>Create a new scenario from the current map, route, tracker and status setup.</p><label>Scenario name<input autoFocus value={newScenarioName} onChange={e => setNewScenarioName(e.target.value)} onKeyDown={e => e.key === "Enter" && createScenario()} /></label><div className="split"><button className="secondary" onClick={() => setNewScenarioOpen(false)}>Cancel</button><button className="primary" onClick={createScenario}>Create Scenario</button></div></div></div>}
       {toast && <div className="toast" role="status">{toast}</div>}
+      {pendingProfile && <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true"><span>Interface Profile</span><h2>{INTERFACE_PROFILES[pendingProfile].name}</h2><p>This scenario was saved with the {INTERFACE_PROFILES[pendingProfile].name} interface ({INTERFACE_PROFILES[pendingProfile].language}). Switch the interface or keep the current profile?</p><div className="split"><button className="secondary" onClick={() => setPendingProfile(null)}>Keep current</button><button className="primary" onClick={() => { switchProfile(pendingProfile); setPendingProfile(null); }}>Switch profile</button></div></div></div>}
     </main>
   );
 }
 
 function PanelTitle({ kicker, title, text }: { kicker: string; title: string; text: string }) { return <div className="panel-title"><span>{kicker}</span><h1>{title}</h1><p>{text}</p></div>; }
 function SectionLabel({ children }: { children: React.ReactNode }) { return <h3 className="section-label">{children}</h3>; }
+function ProfilePicker({ value, onChange, expanded = false }: { value: InterfaceProfileId; onChange: (id: InterfaceProfileId) => void; expanded?: boolean }) {
+  return <div className={`profile-picker ${expanded ? "expanded" : ""}`} role="group" aria-label="Interface Profile">{PROFILE_ORDER.map((id, index) => <button key={id} className={value === id ? "active" : ""} aria-pressed={value === id} onClick={() => onChange(id)} title={`${INTERFACE_PROFILES[id].name} (Shift+${index + 1})`}><img src={INTERFACE_PROFILES[id].mark} alt="" /><span>{INTERFACE_PROFILES[id].shortName}</span></button>)}</div>;
+}
 function formatPoint(value?: Coordinates | string) { return !value ? "" : typeof value === "string" ? value : `${value.lat}, ${value.lng}`; }
 function TrackerPreview({ appearance }: { appearance: Appearance }) {
   return <div className="preview-icon" style={{ opacity: appearance.opacity, transform: `rotate(${appearance.rotation}deg)` }}>{appearance.customIcon ? <img src={appearance.customIcon} alt="Uploaded tracker" /> : <span className="icon-mask" style={{ "--icon-url": `url(/tracker-icons/${appearance.standardIcon}.svg)` } as React.CSSProperties} />}</div>;

@@ -1,4 +1,5 @@
 export type Coordinates = { lat: number; lng: number };
+import type { InterfaceProfileId } from "./interfaceProfiles";
 export type TrackerStatus =
   | "Active" | "Moving" | "Stationary" | "Weak Signal"
   | "Offline" | "Signal Lost" | "Low Battery" | "Unknown";
@@ -43,12 +44,15 @@ export type Scenario = {
   note: string;
   appearance: Appearance;
   zoom: number;
+  interfaceProfile?: InterfaceProfileId;
 };
 export type AppSettings = {
   light: boolean;
   routeVisible: boolean;
   statusVisible: boolean;
   locked: boolean;
+  interfaceProfile: InterfaceProfileId;
+  saveProfileWithScenario: boolean;
 };
 export type StoredAppData = {
   version: 2;
