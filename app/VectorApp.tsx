@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element -- uploaded data URLs and SVG tracker assets intentionally bypass image optimization */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { Map as LeafletMap, Marker, Polyline } from "leaflet";
 import type { Appearance, Coordinates, MobilePanelState, PresenterLock, Scenario, StandardIcon, StoredAppData, TrackerStatus } from "./types";
 import { DEFAULT_APPEARANCE, headingAtProgress, interpolatePosition, parseCoordinateLine, routeDistance, validateScenario } from "./utils";
@@ -50,6 +51,8 @@ export default function VectorApp() {
   const [routeVisible, setRouteVisible] = useState(true);
   const [statusVisible, setStatusVisible] = useState(true);
   const [presenter, setPresenter] = useState(false);
+  const [sheetDragOffset, setSheetDragOffset] = useState(0);
+  const [sheetDragging, setSheetDragging] = useState(false);
   const [uiVisible, setUiVisible] = useState(true);
   const [locked, setLocked] = useState(false);
   const [light, setLight] = useState(false);
@@ -284,13 +287,20 @@ export default function VectorApp() {
     else exitPresenter();
   }, [exitPresenter, presenterLock]);
   const handleSheetPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-    sheetDrag.current = { y: e.clientY, at: performance.now(), state: panelState }; e.currentTarget.setPointerCapture(e.pointerId);
+    sheetDrag.current = { y: e.clientY, at: performance.now(), state: panelState };
+    setSheetDragging(true); setSheetDragOffset(0); e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const handleSheetPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const start = sheetDrag.current; if (!start) return;
+    const limit = window.innerHeight * .7;
+    setSheetDragOffset(Math.max(-limit, Math.min(limit, e.clientY - start.y)));
   };
   const handleSheetPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
-    const start = sheetDrag.current; sheetDrag.current = null; if (!start) return;
+    const start = sheetDrag.current; sheetDrag.current = null; setSheetDragging(false); setSheetDragOffset(0); if (!start) return;
     const elapsed = Math.max(1, performance.now() - start.at); const delta = e.clientY - start.y;
     setPanelState(panelStateFromGesture(start.state, delta, delta / elapsed));
   };
+  const handleSheetPointerCancel = () => { sheetDrag.current = null; setSheetDragging(false); setSheetDragOffset(0); };
   const cancelLongPress = () => { if (longPressTimer.current) window.clearTimeout(longPressTimer.current); longPressTimer.current = null; };
   const handlePresenterPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!presenter) return; presenterPointer.current = { x: e.clientX, y: e.clientY, at: performance.now() };
@@ -361,8 +371,8 @@ export default function VectorApp() {
           {presenter && presenterAttribution && <div className="presenter-attribution">© OpenStreetMap contributors</div>}
         </div>
 
-        {!presenter && <aside className="control-panel" data-panel-state={panelState}>
-          <button className="sheet-handle" aria-label={`${labels.openControls}: ${panelState}`} onPointerDown={handleSheetPointerDown} onPointerUp={handleSheetPointerUp}><span /><b>{labels.openControls}</b><em>{panelState === "collapsed" ? "⌃" : panelState === "expanded" ? "⌄" : "↕"}</em></button>
+        {!presenter && <aside className="control-panel" data-panel-state={panelState} data-dragging={sheetDragging || undefined} style={{ "--sheet-drag": `${sheetDragOffset}px` } as CSSProperties}>
+          <button className="sheet-handle" aria-label={`${labels.openControls}: ${panelState}`} onPointerDown={handleSheetPointerDown} onPointerMove={handleSheetPointerMove} onPointerUp={handleSheetPointerUp} onPointerCancel={handleSheetPointerCancel}><span /><b>{labels.openControls}</b><em>{panelState === "collapsed" ? "⌃" : panelState === "expanded" ? "⌄" : "↕"}</em></button>
           <nav aria-label="Control panel">{[["position", "⌖", labels.position], ["movement", "↝", labels.movement], ["appearance", "◇", labels.appearance], ["scenarios", "▣", labels.scenarios], ["settings", "⚙", labels.settings]].map(([id, icon, label]) => <button key={id} className={activeTab === id ? "active" : ""} onClick={() => setActiveTab(id)}><span>{icon}</span>{label}</button>)}</nav>
           <div className="panel-content">
             {activeTab === "position" && <>
