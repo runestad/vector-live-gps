@@ -120,7 +120,7 @@ export default function VectorApp() {
       setProfileId(normalizeProfile(stored.settings.interfaceProfile)); setSaveProfileWithScenario(stored.settings.saveProfileWithScenario);
       setPresenterLock(stored.settings.presenterLock); setPresenterZoomControls(stored.settings.presenterZoomControls); setPresenterScale(stored.settings.presenterScale);
       setPresenterAttribution(stored.settings.presenterAttribution); setPresenterBranding(stored.settings.presenterBranding); setPresenterClock(stored.settings.presenterClock);
-      setNotificationSound(stored.settings.notificationSound); setUpdated(stored.current.lastUpdateStartSeconds ?? 0);
+      setNotificationSound(stored.settings.notificationSound); setUpdated(stored.current.lastUpdateStartSeconds ?? 0); setCoordText(`${stored.current.position.lat.toFixed(6)}, ${stored.current.position.lng.toFixed(6)}`);
       setRouteText(stored.current.route.map(p => `${p.lat}, ${p.lng}`).join("\n")); hydrated.current = true;
     });
   }, []);
@@ -279,7 +279,7 @@ export default function VectorApp() {
   }, [scenario.lastUpdateStartSeconds, scenario.position.lat, scenario.position.lng, scenario.zoom]);
   const load = (s: Scenario) => {
     const source = s.builtIn ? demos.find(d => d.id === s.id) ?? s : s;
-    const copy = structuredClone(source); setPlaying(false); setSceneAlert(""); alertTriggered.current = false; setScenario(copy); setProgress(0); setUpdated(copy.lastUpdateStartSeconds ?? 0); setRouteText(copy.route.map(p => `${p.lat}, ${p.lng}`).join("\n"));
+    const copy = structuredClone(source); setPlaying(false); setSceneAlert(""); alertTriggered.current = false; setScenario(copy); setProgress(0); setUpdated(copy.lastUpdateStartSeconds ?? 0); setCoordText(`${copy.position.lat.toFixed(6)}, ${copy.position.lng.toFixed(6)}`); setRouteText(copy.route.map(p => `${p.lat}, ${p.lng}`).join("\n"));
     window.setTimeout(() => map.current?.setView([copy.position.lat, copy.position.lng], copy.zoom), 20); notify(`Loaded “${copy.name}”`);
     if (copy.interfaceProfile && copy.interfaceProfile !== profileId) setPendingProfile(copy.interfaceProfile);
   };
