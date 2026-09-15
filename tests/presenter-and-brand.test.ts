@@ -14,6 +14,10 @@ test("Presenter Mode preserves a full-size map and invalidates Leaflet", () => {
   assert.doesNotMatch(component, /className="presenter-tools"/);
   assert.match(css, /presenter\[data-interface-profile="trackpoint-2002"\] \.workspace\{[^}]*grid-template-columns:1fr!important/);
 });
+test("tracker remains draggable outside Presenter Mode", () => {
+  assert.match(component, /if \(presenter\) draggable\.disable\(\); else draggable\.enable\(\);/);
+  assert.doesNotMatch(component, /presenter \|\| scenario\.lockMarker/);
+});
 test("brand logo remains static and tracker upload is isolated", () => {
   assert.match(component, /src=\{profile\.logo\}[^>]*data-brand-logo/);
   assert.match(component, /appearance: \{ \.\.\.scenario\.appearance/);

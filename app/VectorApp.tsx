@@ -169,8 +169,8 @@ export default function VectorApp() {
   useEffect(() => {
     const draggable = marker.current?.dragging;
     if (!draggable) return;
-    if (presenter || scenario.lockMarker) draggable.disable(); else draggable.enable();
-  }, [presenter, scenario.lockMarker]);
+    if (presenter) draggable.disable(); else draggable.enable();
+  }, [presenter]);
 
   useEffect(() => {
     const instance = map.current; if (!instance) return;
