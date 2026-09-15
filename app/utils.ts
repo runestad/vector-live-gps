@@ -110,6 +110,17 @@ export function normalizeScenario(value: Partial<Scenario>, fallbackId: string):
     note: typeof value.note === "string" ? value.note : "",
     appearance: normalizeAppearance(value.appearance),
     zoom: Number(value.zoom) || 14,
+    category: typeof value.category === "string" ? value.category : undefined,
+    subtitle: typeof value.subtitle === "string" ? value.subtitle : undefined,
+    operatorNotes: typeof value.operatorNotes === "string" ? value.operatorNotes : undefined,
+    lastUpdateStartSeconds: Math.max(0, Number(value.lastUpdateStartSeconds) || 0),
+    updateIntervalSeconds: Math.max(1, Number(value.updateIntervalSeconds) || 2),
+    updateBehavior: value.updateBehavior === "aging" ? "aging" : "fresh",
+    startAlert: typeof value.startAlert === "string" ? value.startAlert : undefined,
+    lockMarker: Boolean(value.lockMarker),
+    mapLabel: value.mapLabel && typeof value.mapLabel.text === "string" && isValidCoordinates(value.mapLabel.position?.lat, value.mapLabel.position?.lng)
+      ? { text: value.mapLabel.text, position: value.mapLabel.position, minZoom: Number(value.mapLabel.minZoom) || 15 }
+      : undefined,
   };
 }
 

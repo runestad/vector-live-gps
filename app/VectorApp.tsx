@@ -11,12 +11,14 @@ import { parseGoogleMapsUrl } from "./routing/googleMapsUrlParser";
 import { generateRoute } from "./routing/routeProvider";
 import { INTERFACE_PROFILES, PROFILE_ORDER, isTypingTarget, nextProfile, normalizeProfile, type InterfaceProfileId } from "./interfaceProfiles";
 import { panelStateFromGesture, registerTripleTap, type Tap } from "./presenterGestures";
+import { GREEN_FINGERS_SCENARIOS } from "./productionScenarios";
 
 const osloRoute = [{ lat: 59.9139, lng: 10.7522 }, { lat: 59.9162, lng: 10.7581 }, { lat: 59.9188, lng: 10.7644 }, { lat: 59.9222, lng: 10.7713 }];
 const demos: Scenario[] = [
   { id: "oslo", name: "Oslo sentrum", builtIn: true, position: osloRoute[0], route: osloRoute, routeDistanceMeters: routeDistance(osloRoute), speed: 42, speedMode: "adaptive", adaptiveSpeedPreset: "Normal", loop: true, status: "Active", battery: 84, signal: "Strong", trackerName: "VECTOR-01", deviceId: "VT-8347", vehicle: "Unknown", registration: "—", note: "Demo route through central Oslo", appearance: DEFAULT_APPEARANCE, zoom: 14 },
   { id: "road", name: "Landevei", builtIn: true, position: { lat: 60.0938, lng: 11.1882 }, route: [{ lat: 60.0938, lng: 11.1882 }, { lat: 60.1102, lng: 11.231 }, { lat: 60.127, lng: 11.276 }], speed: 80, speedMode: "adaptive", adaptiveSpeedPreset: "Fast", loop: false, status: "Moving", battery: 67, signal: "Good", trackerName: "VECTOR-02", deviceId: "VT-2914", vehicle: "Van", registration: "—", note: "Rural movement test", appearance: { ...DEFAULT_APPEARANCE, standardIcon: "van" }, zoom: 12 },
   { id: "offline", name: "Tracker offline", builtIn: true, position: { lat: 59.9281, lng: 10.7174 }, route: [], routeDistanceMeters: 0, speed: 0, speedMode: "adaptive", adaptiveSpeedPreset: "Normal", loop: false, status: "Offline", battery: 12, signal: "Offline", trackerName: "VECTOR-03", deviceId: "VT-6108", vehicle: "Unknown", registration: "—", note: "Last seen 4 minutes ago", appearance: { ...DEFAULT_APPEARANCE, pulse: false, standardIcon: "magnetic-tracker" }, zoom: 14 },
+  ...GREEN_FINGERS_SCENARIOS,
 ];
 const statuses: TrackerStatus[] = ["Active", "Moving", "Stationary", "Weak Signal", "Offline", "Signal Lost", "Low Battery", "Unknown"];
 const iconChoices: Array<{ id: StandardIcon; label: string }> = [
@@ -38,6 +40,7 @@ export default function VectorApp() {
   const map = useRef<LeafletMap | null>(null);
   const marker = useRef<Marker | null>(null);
   const line = useRef<Polyline | null>(null);
+  const mapLabel = useRef<Marker | null>(null);
   const animation = useRef<number | null>(null);
   const lastFrame = useRef(0);
   const activeTabRef = useRef("position");
@@ -46,8 +49,10 @@ export default function VectorApp() {
   const presenterRef = useRef(false);
   const sheetDrag = useRef<{ y: number; at: number; state: MobilePanelState } | null>(null);
   const presenterPointer = useRef<{ x: number; y: number; at: number } | null>(null);
+  const activePresenterPointers = useRef(new Set<number>());
   const presenterTaps = useRef<Tap[]>([]);
   const longPressTimer = useRef<number | null>(null);
+  const alertTriggered = useRef(false);
   const [scenario, setScenario] = useState<Scenario>(demos[0]);
   const [scenarios, setScenarios] = useState<Scenario[]>(demos);
   const [activeTab, setActiveTab] = useState("position");
@@ -68,6 +73,8 @@ export default function VectorApp() {
   const [delay, setDelay] = useState(0);
   const [hideCursor, setHideCursor] = useState(false);
   const [updated, setUpdated] = useState(0);
+  const [sceneAlert, setSceneAlert] = useState("");
+  const [notificationSound, setNotificationSound] = useState(false);
   const [newScenarioOpen, setNewScenarioOpen] = useState(false);
   const [newScenarioName, setNewScenarioName] = useState("New Scenario");
   const [routeLink, setRouteLink] = useState("");
@@ -113,14 +120,15 @@ export default function VectorApp() {
       setProfileId(normalizeProfile(stored.settings.interfaceProfile)); setSaveProfileWithScenario(stored.settings.saveProfileWithScenario);
       setPresenterLock(stored.settings.presenterLock); setPresenterZoomControls(stored.settings.presenterZoomControls); setPresenterScale(stored.settings.presenterScale);
       setPresenterAttribution(stored.settings.presenterAttribution); setPresenterBranding(stored.settings.presenterBranding); setPresenterClock(stored.settings.presenterClock);
+      setNotificationSound(stored.settings.notificationSound); setUpdated(stored.current.lastUpdateStartSeconds ?? 0);
       setRouteText(stored.current.route.map(p => `${p.lat}, ${p.lng}`).join("\n")); hydrated.current = true;
     });
   }, []);
   useEffect(() => {
     if (!hydrated.current) return;
-    const stored: StoredAppData = { version: 2, scenarios, activeScenarioId: scenario.id, current: scenario, settings: { light, routeVisible, statusVisible, locked, interfaceProfile: profileId, saveProfileWithScenario, presenterLock, presenterZoomControls, presenterScale, presenterAttribution, presenterBranding, presenterClock } };
+    const stored: StoredAppData = { version: 2, scenarios, activeScenarioId: scenario.id, current: scenario, settings: { light, routeVisible, statusVisible, locked, interfaceProfile: profileId, saveProfileWithScenario, presenterLock, presenterZoomControls, presenterScale, presenterAttribution, presenterBranding, presenterClock, notificationSound } };
     localStorage.setItem(STORAGE_V2_KEY, serializeStoredData(stored));
-  }, [scenario, scenarios, light, routeVisible, statusVisible, locked, profileId, saveProfileWithScenario, presenterLock, presenterZoomControls, presenterScale, presenterAttribution, presenterBranding, presenterClock]);
+  }, [scenario, scenarios, light, routeVisible, statusVisible, locked, profileId, saveProfileWithScenario, presenterLock, presenterZoomControls, presenterScale, presenterAttribution, presenterBranding, presenterClock, notificationSound]);
 
   useEffect(() => {
     if (!mapNode.current || map.current) return;
@@ -157,6 +165,30 @@ export default function VectorApp() {
       }
     });
   }, [position, scenario.route, scenario.appearance, scenario.status, angle, routeVisible, profileId]);
+
+  useEffect(() => {
+    const draggable = marker.current?.dragging;
+    if (!draggable) return;
+    if (presenter || scenario.lockMarker) draggable.disable(); else draggable.enable();
+  }, [presenter, scenario.lockMarker]);
+
+  useEffect(() => {
+    const instance = map.current; if (!instance) return;
+    mapLabel.current?.remove(); mapLabel.current = null;
+    if (!scenario.mapLabel) return;
+    let disposed = false;
+    import("leaflet").then(L => {
+      if (disposed || !map.current || !scenario.mapLabel) return;
+      const label = scenario.mapLabel;
+      const labelIcon = L.divIcon({ className: "production-map-label-host", iconSize: [150, 30], iconAnchor: [75, 42], html: `<span>${label.text}</span>` });
+      const item = L.marker([label.position.lat, label.position.lng], { icon: labelIcon, interactive: false }).addTo(map.current);
+      mapLabel.current = item;
+      const updateLabel = () => item.getElement()?.toggleAttribute("data-visible", (map.current?.getZoom() ?? 0) >= label.minZoom);
+      updateLabel(); map.current.on("zoomend", updateLabel);
+      item.once("remove", () => map.current?.off("zoomend", updateLabel));
+    });
+    return () => { disposed = true; mapLabel.current?.remove(); mapLabel.current = null; };
+  }, [scenario.mapLabel]);
 
   useEffect(() => {
     const refresh = () => {
@@ -196,14 +228,18 @@ export default function VectorApp() {
           const next = p + delta * Math.max(.3, speed / 3.6) / Math.max(1, distance);
           if (next >= 1) { if (scenario.loop) return 0; setPlaying(false); return 1; } return next;
         });
-        setUpdated(0); animation.current = requestAnimationFrame(frame);
+        animation.current = requestAnimationFrame(frame);
       };
       animation.current = requestAnimationFrame(frame);
     };
     const delayTimer = setTimeout(run, delay * 1000);
     return () => { clearTimeout(delayTimer); if (animation.current) cancelAnimationFrame(animation.current); };
   }, [playing, scenario.route, scenario.speed, scenario.speedMode, scenario.adaptiveSpeedPreset, scenario.loop, scenario.routeDistanceMeters, delay]);
-  useEffect(() => { const tick = window.setInterval(() => setUpdated(v => v + 1), 1000); return () => clearInterval(tick); }, []);
+  useEffect(() => {
+    if (!playing) return;
+    const tick = window.setInterval(() => setUpdated(v => scenario.updateBehavior === "aging" ? v + 1 : (v + 1) % Math.max(1, scenario.updateIntervalSeconds ?? 2)), 1000);
+    return () => clearInterval(tick);
+  }, [playing, scenario.updateBehavior, scenario.updateIntervalSeconds]);
 
   const center = useCallback(() => map.current?.flyTo([position.lat, position.lng], Math.max(map.current.getZoom(), 14), { duration: .6 }), [position]);
   const fitRoute = () => scenario.route.length > 1 && map.current?.fitBounds(scenario.route.map(p => [p.lat, p.lng]), { padding: [45, 45] });
@@ -222,9 +258,28 @@ export default function VectorApp() {
     if (points.length < 2 || points.some(p => !p)) { setError("The route needs at least two valid coordinate lines."); return; }
     setError(""); applyRoute(points as Coordinates[]);
   };
+  const playAlertTone = useCallback(() => {
+    if (!notificationSound) return;
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass(); const oscillator = context.createOscillator(); const gain = context.createGain();
+    oscillator.frequency.setValueAtTime(740, context.currentTime); gain.gain.setValueAtTime(.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(.12, context.currentTime + .02); gain.gain.exponentialRampToValueAtTime(.0001, context.currentTime + .28);
+    oscillator.connect(gain); gain.connect(context.destination); oscillator.start(); oscillator.stop(context.currentTime + .3); oscillator.addEventListener("ended", () => context.close());
+  }, [notificationSound]);
+  const startPlayback = useCallback(() => {
+    if (!playing && scenario.startAlert && !alertTriggered.current) {
+      alertTriggered.current = true; setSceneAlert(scenario.startAlert); playAlertTone(); window.setTimeout(() => setSceneAlert(""), 4200);
+    }
+    setPlaying(value => !value);
+  }, [playAlertTone, playing, scenario.startAlert]);
+  const resetPlayback = useCallback(() => {
+    setPlaying(false); setProgress(0); setUpdated(scenario.lastUpdateStartSeconds ?? 0); setSceneAlert(""); alertTriggered.current = false;
+    window.setTimeout(() => map.current?.setView([scenario.position.lat, scenario.position.lng], scenario.zoom), 20);
+  }, [scenario.lastUpdateStartSeconds, scenario.position.lat, scenario.position.lng, scenario.zoom]);
   const load = (s: Scenario) => {
     const source = s.builtIn ? demos.find(d => d.id === s.id) ?? s : s;
-    const copy = structuredClone(source); setScenario(copy); setProgress(0); setRouteText(copy.route.map(p => `${p.lat}, ${p.lng}`).join("\n"));
+    const copy = structuredClone(source); setPlaying(false); setSceneAlert(""); alertTriggered.current = false; setScenario(copy); setProgress(0); setUpdated(copy.lastUpdateStartSeconds ?? 0); setRouteText(copy.route.map(p => `${p.lat}, ${p.lng}`).join("\n"));
     window.setTimeout(() => map.current?.setView([copy.position.lat, copy.position.lng], copy.zoom), 20); notify(`Loaded “${copy.name}”`);
     if (copy.interfaceProfile && copy.interfaceProfile !== profileId) setPendingProfile(copy.interfaceProfile);
   };
@@ -314,14 +369,17 @@ export default function VectorApp() {
   const handleSheetPointerCancel = () => { sheetDrag.current = null; setSheetDragging(false); setSheetDragOffset(0); };
   const cancelLongPress = () => { if (longPressTimer.current) window.clearTimeout(longPressTimer.current); longPressTimer.current = null; };
   const handlePresenterPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!presenter) return; presenterPointer.current = { x: e.clientX, y: e.clientY, at: performance.now() };
+    if (!presenter) return; activePresenterPointers.current.add(e.pointerId);
+    if (activePresenterPointers.current.size > 1) { presenterPointer.current = null; presenterTaps.current = []; cancelLongPress(); return; }
+    presenterPointer.current = { x: e.clientX, y: e.clientY, at: performance.now() };
     cancelLongPress(); if (presenterLock === "long-press") longPressTimer.current = window.setTimeout(requestPresenterExit, 1500);
   };
   const handlePresenterPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const start = presenterPointer.current; if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) { presenterPointer.current = null; cancelLongPress(); }
+    const start = presenterPointer.current; if (activePresenterPointers.current.size > 1 || (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12)) { presenterPointer.current = null; cancelLongPress(); }
   };
   const handlePresenterPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    cancelLongPress(); const start = presenterPointer.current; presenterPointer.current = null;
+    activePresenterPointers.current.delete(e.pointerId); cancelLongPress(); const start = presenterPointer.current; presenterPointer.current = null;
+    if (activePresenterPointers.current.size > 0) return;
     if (!start || !presenter || !["triple", "triple-confirm"].includes(presenterLock)) return;
     if (performance.now() - start.at > 450 || Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) return;
     const result = registerTripleTap(presenterTaps.current, { x: e.clientX, y: e.clientY, at: performance.now() }); presenterTaps.current = result.taps;
@@ -335,8 +393,8 @@ export default function VectorApp() {
       const directProfileIndex = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
       if (e.shiftKey && directProfileIndex >= 0) { e.preventDefault(); switchProfile(PROFILE_ORDER[directProfileIndex]); }
       else if (!e.shiftKey && e.key.toLowerCase() === "d") switchProfile(nextProfile(profileId));
-      else if (e.code === "Space") { e.preventDefault(); setPlaying(v => !v); }
-      else if (e.key.toLowerCase() === "r") { setProgress(0); setPlaying(false); }
+      else if (e.code === "Space") { e.preventDefault(); startPlayback(); }
+      else if (e.key.toLowerCase() === "r") resetPlayback();
       else if (e.key.toLowerCase() === "f") fullscreen();
       else if (e.key.toLowerCase() === "p") presenter ? exitPresenter() : enterPresenter();
       else if (e.key.toLowerCase() === "c") center();
@@ -346,7 +404,7 @@ export default function VectorApp() {
       else if (e.key === "Escape") exitPresenter();
     };
     window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
-  }, [center, enterPresenter, exitPresenter, presenter, profileId, switchProfile]);
+  }, [center, enterPresenter, exitPresenter, presenter, profileId, resetPlayback, startPlayback, switchProfile]);
   useEffect(() => {
     if (!presenter) return; let timer = window.setTimeout(() => setHideCursor(true), 2500);
     const move = () => { setHideCursor(false); clearTimeout(timer); timer = window.setTimeout(() => setHideCursor(true), 2500); };
@@ -362,20 +420,21 @@ export default function VectorApp() {
       </header>}
 
       <section className="workspace">
-        <div className="map-wrap" data-testid="map-wrap" onPointerDown={handlePresenterPointerDown} onPointerMove={handlePresenterPointerMove} onPointerUp={handlePresenterPointerUp} onPointerCancel={() => { presenterPointer.current = null; cancelLongPress(); }}>
+        <div className="map-wrap" data-testid="map-wrap" onPointerDown={handlePresenterPointerDown} onPointerMove={handlePresenterPointerMove} onPointerUp={handlePresenterPointerUp} onPointerCancel={e => { activePresenterPointers.current.delete(e.pointerId); presenterPointer.current = null; cancelLongPress(); }}>
           <div ref={mapNode} className="map" aria-label="Interactive OpenStreetMap" data-testid="map-container" />
           <div className="map-shade" />
           {presenter && presenterBranding && <div className="presenter-brand"><img src={profile.logo} alt="" /><div><b>{profile.name}</b><span>{profile.tagline}</span></div><aside><strong>{profile.presenterCode}</strong>{presenterClock && <time>{new Date().toLocaleString(profile.language === "Norsk" ? "nb-NO" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}</time>}<small>{profile.presenterNotice}</small></aside></div>}
           {!presenter && <><div className="map-tools"><button onClick={() => map.current?.zoomIn()} title="Zoom in">＋</button><button onClick={() => map.current?.zoomOut()} title="Zoom out">−</button><button onClick={center} title="Center tracker">◎</button><button onClick={fullscreen} title="Fullscreen">⛶</button></div><div className="map-style"><span className="active">Street</span><span title="Prepared for a future imagery provider">Satellite*</span></div></>}
           {presenter && presenterZoomControls && <div className="map-tools presenter-map-tools" aria-label="Presenter zoom controls"><button onClick={() => map.current?.zoomIn()} title="Zoom in">＋</button><button onClick={() => map.current?.zoomOut()} title="Zoom out">−</button></div>}
           {statusVisible && <aside className={`status-card ${statusTone}`} data-testid="tracker-status">
-            <div className="eyebrow"><span><i /> {scenario.status}</span><span>GPS / LIVE</span></div><h2>{scenario.trackerName}</h2>
+            <div className="eyebrow"><span><i /> {scenario.status}</span><span>{scenario.updateBehavior === "aging" ? scenario.status === "Signal Lost" ? "NO CONNECTION" : "LAST POSITION" : "GPS / LIVE"}</span></div><h2>{scenario.trackerName}</h2>
             <div className="coords">{position.lat.toFixed(6)}, {position.lng.toFixed(6)}</div>
             <div className="metrics"><div><span>Speed</span><b>{currentSpeed}<small> km/h</small></b></div><div><span>Heading</span><b>{Math.round(angle)}°</b></div><div><span>Battery</span><b>{scenario.battery}<small>%</small></b></div><div><span>Signal</span><b>{scenario.signal}</b></div></div>
-            <div className="updated"><span>Last update</span><b>{scenario.status === "Offline" ? "4 min ago" : updated < 2 ? "Just now" : `${updated}s ago`}</b></div>
+            <div className="updated"><span>Last update</span><b>{formatUpdateAge(updated)}</b></div>
           </aside>}
+          {sceneAlert && <div className="scene-alert" role="status"><i />{sceneAlert}</div>}
           {!presenter && <div className="simulation-bar" data-testid="simulation-bar">
-            <button onClick={() => { setPlaying(false); setProgress(0); }} title="Stop">■</button><button className="play" onClick={() => setPlaying(v => !v)} title="Play or pause">{playing ? "Ⅱ" : "▶"}</button>
+            <button onClick={resetPlayback} title="Stop and reset">■</button><button className="play" onClick={startPlayback} title="Play or pause">{playing ? "Ⅱ" : "▶"}</button>
             <button onClick={() => setProgress(v => Math.max(0, v - .02))}>−5s</button><input aria-label="Simulation progress" type="range" min="0" max="1" step=".001" value={progress} onChange={e => setProgress(+e.target.value)} />
             <time>{Math.round(progress * 100)}%</time><button onClick={() => setProgress(v => Math.min(1, v + .02))}>+5s</button><button className={scenario.loop ? "toggle-on" : ""} onClick={() => patch({ loop: !scenario.loop })}>↻ Loop</button>
           </div>}
@@ -396,6 +455,7 @@ export default function VectorApp() {
             </>}
             {activeTab === "movement" && <>
               <PanelTitle kicker="Route editor" title={labels.movementSimulator} text="Generate a road route, click map points, or paste coordinate pairs." />
+              {scenario.category === "Grønne Fingre" && <div className="production-cue"><span>GRØNNE FINGRE · SCENE {scenario.name}</span><b>{scenario.subtitle}</b><p>{scenario.operatorNotes}</p>{scenario.updateBehavior === "aging" && <button className="secondary full" onClick={() => { setSceneAlert(scenario.status === "Signal Lost" ? "Ingen nye posisjonsdata" : "Svakt signal – prøver igjen"); window.setTimeout(() => setSceneAlert(""), 3000); }}>Try position refresh</button>}{scenario.id === "gf-scene-275" && <div className="split"><button className="secondary" onClick={() => map.current?.flyTo([scenario.position.lat, scenario.position.lng], scenario.mapLabel?.minZoom ?? 16, { duration: .8 })}>Zoom to Grønne Fingre</button><button className="secondary" onClick={resetPlayback}>Reset overview</button></div>}</div>}
               <details className="route-import" open><summary>Import Route Link</summary>
                 <label>Google Maps route URL<input value={routeLink} onChange={e => setRouteLink(e.target.value)} placeholder="https://www.google.com/maps/dir/..." /></label>
                 <button className="secondary full" onClick={inspectRouteLink}>Analyze Link</button>
@@ -410,6 +470,7 @@ export default function VectorApp() {
               <label className="check speed-mode"><input type="checkbox" checked={scenario.speedMode === "adaptive"} onChange={e => patch({ speedMode: e.target.checked ? "adaptive" : "set" })} /> Adaptive speed</label>
               {scenario.speedMode === "adaptive" ? <label>Driving pace<select value={scenario.adaptiveSpeedPreset} onChange={e => patch({ adaptiveSpeedPreset: e.target.value as AdaptiveSpeedPreset })}><option>Slow</option><option>Normal</option><option>Fast</option></select><small className="field-help">Varies naturally with acceleration, braking and route curvature.</small></label> : <label>Set speed (km/h)<input type="number" min="1" max="200" value={scenario.speed} onChange={e => patch({ speed: +e.target.value })} /></label>}
               <label>Start delay<input type="number" min="0" max="30" value={delay} onChange={e => setDelay(+e.target.value)} /></label>
+              <label className="check"><input type="checkbox" checked={notificationSound} onChange={e => setNotificationSound(e.target.checked)} /> Movement alert sound</label>
               <div className="split"><button className="secondary" onClick={fitRoute}>Fit Route in View</button><button className="secondary" onClick={() => { patch({ route: [], routeDistanceMeters: 0 }); setRouteText(""); setProgress(0); }}>Clear Route</button></div>
               <label className="check"><input type="checkbox" checked={routeVisible} onChange={e => setRouteVisible(e.target.checked)} /> Show route trace</label><label className="check"><input type="checkbox" checked={scenario.loop} onChange={e => patch({ loop: e.target.checked })} /> Loop continuously</label>
             </>}
@@ -433,12 +494,13 @@ export default function VectorApp() {
               <PanelTitle kicker="Local library" title="Scenarios" text="Built-in demos stay pristine. Custom scenarios are saved only in this browser." />
               <button className="primary new-scenario" onClick={() => setNewScenarioOpen(true)}>＋ {labels.newScenario}</button><button className="secondary full" onClick={save}>{labels.saveScenario}</button>
               <div className="split"><button className="secondary" onClick={exportScenario}>Export JSON</button><label className="secondary file-button">Import JSON<input type="file" accept=".json" onChange={e => importScenario(e.target.files?.[0])} /></label></div>
-              <div className="scenario-list">{scenarios.map(s => <div className={`scenario-row ${scenario.id === s.id ? "active" : ""}`} key={s.id}><button className="scenario-main" onClick={() => load(s)}><span className={`scenario-dot ${s.status.toLowerCase().replaceAll(" ", "-")}`} /><span><b>{s.name}</b><small>{s.builtIn ? "Demo" : "Custom"} · {s.trackerName}</small></span><em>›</em></button><div className="scenario-actions"><button onClick={() => duplicate(s)}>Duplicate</button>{!s.builtIn && <><button onClick={() => rename(s)}>Rename</button><button onClick={() => removeScenario(s)}>Delete</button></>}</div></div>)}</div>
+              <div className="scenario-list">{scenarios.map((s, index) => <div className="scenario-entry" key={s.id}>{(index === 0 || scenarios[index - 1]?.category !== s.category) && <h3 className="scenario-group-label">{s.category ?? "Demo scenarios"}</h3>}<div className={`scenario-row ${scenario.id === s.id ? "active" : ""}`}><button className="scenario-main" onClick={() => load(s)}><span className={`scenario-dot ${s.status.toLowerCase().replaceAll(" ", "-")}`} /><span><b>{s.name}</b><small>{s.subtitle ?? `${s.builtIn ? "Demo" : "Custom"} · ${s.trackerName}`}</small></span><em>›</em></button><div className="scenario-actions"><button onClick={() => duplicate(s)}>Duplicate</button>{!s.builtIn && <><button onClick={() => rename(s)}>Rename</button><button onClick={() => removeScenario(s)}>Delete</button></>}</div></div></div>)}</div>
             </>}
             {activeTab === "settings" && <>
               <PanelTitle kicker="Device metadata" title="Settings" text="Edit on-screen production details and presenter options." />
               <label>Tracker name<input value={scenario.trackerName} onChange={e => patch({ trackerName: e.target.value })} /></label><div className="two-col"><label>Device ID<input value={scenario.deviceId} onChange={e => patch({ deviceId: e.target.value })} /></label><label>Registration<input value={scenario.registration} onChange={e => patch({ registration: e.target.value })} /></label></div>
               <label>Vehicle<input value={scenario.vehicle} onChange={e => patch({ vehicle: e.target.value })} /></label><label>Note<textarea rows={3} value={scenario.note} onChange={e => patch({ note: e.target.value })} /></label>
+              {scenario.category === "Grønne Fingre" && <><SectionLabel>Production setup</SectionLabel><label>Operator notes<textarea rows={3} value={scenario.operatorNotes ?? ""} onChange={e => patch({ operatorNotes: e.target.value })} /></label><div className="two-col"><label>Initial update age (seconds)<input type="number" min="0" value={scenario.lastUpdateStartSeconds ?? 0} onChange={e => { patch({ lastUpdateStartSeconds: +e.target.value }); setUpdated(+e.target.value); }} /></label><label>Start zoom<input type="number" min="3" max="19" value={scenario.zoom} onChange={e => patch({ zoom: +e.target.value })} /></label></div><label>Update behavior<select value={scenario.updateBehavior ?? "fresh"} onChange={e => patch({ updateBehavior: e.target.value as Scenario["updateBehavior"] })}><option value="fresh">Fresh every 2 seconds</option><option value="aging">Age continuously</option></select></label></>}
               <label className="check"><input type="checkbox" checked={statusVisible} onChange={e => setStatusVisible(e.target.checked)} /> Show status in Presenter Mode</label><label className="check"><input type="checkbox" checked={locked} onChange={e => setLocked(e.target.checked)} /> Lock map during filming</label>
               <SectionLabel>Presenter Mode</SectionLabel><label>{labels.presenterLock}<select value={presenterLock} onChange={e => setPresenterLock(e.target.value as PresenterLock)}><option value="off">Off</option><option value="triple">Triple tap to exit</option><option value="triple-confirm">Triple tap + confirmation</option><option value="long-press">Long press to exit</option></select></label>
               <label className="check"><input type="checkbox" checked={presenterZoomControls} onChange={e => setPresenterZoomControls(e.target.checked)} /> Zoom controls</label>
@@ -468,6 +530,12 @@ function ProfilePicker({ value, onChange, expanded = false }: { value: Interface
   return <div className={`profile-picker ${expanded ? "expanded" : ""}`} role="group" aria-label="Interface Profile">{PROFILE_ORDER.map((id, index) => <button key={id} className={value === id ? "active" : ""} aria-pressed={value === id} onClick={() => onChange(id)} title={`${INTERFACE_PROFILES[id].name} (Shift+${index + 1})`}><img src={INTERFACE_PROFILES[id].mark} alt="" /><span>{INTERFACE_PROFILES[id].shortName}</span></button>)}</div>;
 }
 function formatPoint(value?: Coordinates | string) { return !value ? "" : typeof value === "string" ? value : `${value.lat}, ${value.lng}`; }
+function formatUpdateAge(seconds: number) {
+  if (seconds < 2) return "Just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60); const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s ago` : `${minutes} min ago`;
+}
 function TrackerPreview({ appearance, profileId = "vector" }: { appearance: Appearance; profileId?: InterfaceProfileId }) {
   return <div className="preview-icon" style={{ opacity: appearance.opacity, transform: `rotate(${appearance.rotation}deg)` }}>{appearance.customIcon ? <img src={appearance.customIcon} alt="Uploaded tracker" /> : <span className="icon-mask" style={{ "--icon-url": `url(${iconAsset(profileId, appearance.standardIcon)})` } as React.CSSProperties} />}</div>;
 }

@@ -10,6 +10,7 @@ export type PulseIntensity = "Subtle" | "Normal" | "Strong";
 export type PulseSpeed = "Slow" | "Normal" | "Fast";
 export type SpeedMode = "adaptive" | "set";
 export type AdaptiveSpeedPreset = "Slow" | "Normal" | "Fast";
+export type UpdateBehavior = "fresh" | "aging";
 export type MobilePanelState = "collapsed" | "half" | "expanded";
 export type PresenterLock = "off" | "triple" | "triple-confirm" | "long-press";
 export type Appearance = {
@@ -51,6 +52,15 @@ export type Scenario = {
   appearance: Appearance;
   zoom: number;
   interfaceProfile?: InterfaceProfileId;
+  category?: string;
+  subtitle?: string;
+  operatorNotes?: string;
+  lastUpdateStartSeconds?: number;
+  updateIntervalSeconds?: number;
+  updateBehavior?: UpdateBehavior;
+  startAlert?: string;
+  lockMarker?: boolean;
+  mapLabel?: { text: string; position: Coordinates; minZoom: number };
 };
 export type AppSettings = {
   light: boolean;
@@ -65,6 +75,7 @@ export type AppSettings = {
   presenterAttribution: boolean;
   presenterBranding: boolean;
   presenterClock: boolean;
+  notificationSound: boolean;
 };
 export type StoredAppData = {
   version: 2;
