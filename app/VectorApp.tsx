@@ -4,8 +4,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Map as LeafletMap, Marker, Polyline } from "leaflet";
-import type { Appearance, Coordinates, MobilePanelState, PresenterLock, Scenario, StandardIcon, StoredAppData, TrackerStatus } from "./types";
-import { DEFAULT_APPEARANCE, headingAtProgress, interpolatePosition, parseCoordinateLine, routeDistance, validateScenario } from "./utils";
+import type { AdaptiveSpeedPreset, Appearance, Coordinates, MobilePanelState, PresenterLock, Scenario, StandardIcon, StoredAppData, TrackerStatus } from "./types";
+import { adaptiveSpeedKmh, DEFAULT_APPEARANCE, estimatedAdaptiveSpeedKmh, headingAtProgress, interpolatePosition, parseCoordinateLine, routeDistance, validateScenario } from "./utils";
 import { createCustomScenario, deleteScenario, duplicateScenario, migrateStoredData, serializeStoredData, STORAGE_V1_KEY, STORAGE_V2_KEY } from "./storage";
 import { parseGoogleMapsUrl } from "./routing/googleMapsUrlParser";
 import { generateRoute } from "./routing/routeProvider";
@@ -14,9 +14,9 @@ import { panelStateFromGesture, registerTripleTap, type Tap } from "./presenterG
 
 const osloRoute = [{ lat: 59.9139, lng: 10.7522 }, { lat: 59.9162, lng: 10.7581 }, { lat: 59.9188, lng: 10.7644 }, { lat: 59.9222, lng: 10.7713 }];
 const demos: Scenario[] = [
-  { id: "oslo", name: "Oslo sentrum", builtIn: true, position: osloRoute[0], route: osloRoute, routeDistanceMeters: routeDistance(osloRoute), speed: 42, loop: true, status: "Active", battery: 84, signal: "Strong", trackerName: "VECTOR-01", deviceId: "VT-8347", vehicle: "Unknown", registration: "—", note: "Demo route through central Oslo", appearance: DEFAULT_APPEARANCE, zoom: 14 },
-  { id: "road", name: "Landevei", builtIn: true, position: { lat: 60.0938, lng: 11.1882 }, route: [{ lat: 60.0938, lng: 11.1882 }, { lat: 60.1102, lng: 11.231 }, { lat: 60.127, lng: 11.276 }], speed: 80, loop: false, status: "Moving", battery: 67, signal: "Good", trackerName: "VECTOR-02", deviceId: "VT-2914", vehicle: "Van", registration: "—", note: "Rural movement test", appearance: { ...DEFAULT_APPEARANCE, standardIcon: "van" }, zoom: 12 },
-  { id: "offline", name: "Tracker offline", builtIn: true, position: { lat: 59.9281, lng: 10.7174 }, route: [], routeDistanceMeters: 0, speed: 0, loop: false, status: "Offline", battery: 12, signal: "Offline", trackerName: "VECTOR-03", deviceId: "VT-6108", vehicle: "Unknown", registration: "—", note: "Last seen 4 minutes ago", appearance: { ...DEFAULT_APPEARANCE, pulse: false, standardIcon: "magnetic-tracker" }, zoom: 14 },
+  { id: "oslo", name: "Oslo sentrum", builtIn: true, position: osloRoute[0], route: osloRoute, routeDistanceMeters: routeDistance(osloRoute), speed: 42, speedMode: "adaptive", adaptiveSpeedPreset: "Normal", loop: true, status: "Active", battery: 84, signal: "Strong", trackerName: "VECTOR-01", deviceId: "VT-8347", vehicle: "Unknown", registration: "—", note: "Demo route through central Oslo", appearance: DEFAULT_APPEARANCE, zoom: 14 },
+  { id: "road", name: "Landevei", builtIn: true, position: { lat: 60.0938, lng: 11.1882 }, route: [{ lat: 60.0938, lng: 11.1882 }, { lat: 60.1102, lng: 11.231 }, { lat: 60.127, lng: 11.276 }], speed: 80, speedMode: "adaptive", adaptiveSpeedPreset: "Fast", loop: false, status: "Moving", battery: 67, signal: "Good", trackerName: "VECTOR-02", deviceId: "VT-2914", vehicle: "Van", registration: "—", note: "Rural movement test", appearance: { ...DEFAULT_APPEARANCE, standardIcon: "van" }, zoom: 12 },
+  { id: "offline", name: "Tracker offline", builtIn: true, position: { lat: 59.9281, lng: 10.7174 }, route: [], routeDistanceMeters: 0, speed: 0, speedMode: "adaptive", adaptiveSpeedPreset: "Normal", loop: false, status: "Offline", battery: 12, signal: "Offline", trackerName: "VECTOR-03", deviceId: "VT-6108", vehicle: "Unknown", registration: "—", note: "Last seen 4 minutes ago", appearance: { ...DEFAULT_APPEARANCE, pulse: false, standardIcon: "magnetic-tracker" }, zoom: 14 },
 ];
 const statuses: TrackerStatus[] = ["Active", "Moving", "Stationary", "Weak Signal", "Offline", "Signal Lost", "Low Battery", "Unknown"];
 const iconChoices: Array<{ id: StandardIcon; label: string }> = [
@@ -27,6 +27,11 @@ const iconChoices: Array<{ id: StandardIcon; label: string }> = [
 ];
 const makeId = () => `custom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const formatDistance = (meters: number) => meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
+const iconAsset = (profileId: InterfaceProfileId, icon: StandardIcon) => {
+  if (profileId === "vector") return `/tracker-icons/${icon}.svg`;
+  const family = icon === "dot" ? "dot" : ["car", "van", "motorcycle", "truck", "suv", "boat", "bicycle"].includes(icon) ? "vehicle" : icon === "arrow" ? "arrow" : "beacon";
+  return `/tracker-icons/${profileId}/${family}.svg`;
+};
 
 export default function VectorApp() {
   const mapNode = useRef<HTMLDivElement>(null);
@@ -87,9 +92,11 @@ export default function VectorApp() {
 
   const position = useMemo(() => interpolatePosition(scenario.route.length ? scenario.route : [scenario.position], progress), [scenario.route, scenario.position, progress]);
   const angle = scenario.route.length > 1 ? headingAtProgress(scenario.route, progress) : 0;
+  const currentSpeed = playing ? (scenario.speedMode === "adaptive" ? adaptiveSpeedKmh(scenario.route, progress, scenario.adaptiveSpeedPreset) : scenario.speed) : 0;
   const statusTone = scenario.status === "Offline" || scenario.status === "Signal Lost" ? "danger" : scenario.status === "Weak Signal" || scenario.status === "Low Battery" ? "warning" : "active";
   const distanceMeters = scenario.routeDistanceMeters ?? routeDistance(scenario.route);
-  const simulationSeconds = scenario.speed > 0 ? distanceMeters / (scenario.speed / 3.6) : 0;
+  const estimateSpeed = scenario.speedMode === "adaptive" ? estimatedAdaptiveSpeedKmh(scenario.adaptiveSpeedPreset) : scenario.speed;
+  const simulationSeconds = estimateSpeed > 0 ? distanceMeters / (estimateSpeed / 3.6) : 0;
 
   const patch = useCallback((value: Partial<Scenario>) => setScenario(s => ({ ...s, ...value })), []);
   const patchAppearance = (value: Partial<Appearance>) => patch({ appearance: { ...scenario.appearance, ...value } });
@@ -122,7 +129,7 @@ export default function VectorApp() {
       if (cancelled || !mapNode.current) return;
       const m = L.map(mapNode.current, { zoomControl: false, attributionControl: true, preferCanvas: true }).setView([scenario.position.lat, scenario.position.lng], scenario.zoom);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(m);
-      const mk = L.marker([scenario.position.lat, scenario.position.lng], { draggable: true, icon: trackerIcon(L, scenario.appearance, scenario.status, 0) }).addTo(m);
+      const mk = L.marker([scenario.position.lat, scenario.position.lng], { draggable: true, icon: trackerIcon(L, scenario.appearance, scenario.status, 0, profileId) }).addTo(m);
       mk.on("dragend", () => { const p = mk.getLatLng(); patch({ position: { lat: p.lat, lng: p.lng }, route: [], routeDistanceMeters: 0 }); setProgress(0); });
       m.on("click", e => {
         if (lockedRef.current || presenterRef.current) return;
@@ -136,20 +143,20 @@ export default function VectorApp() {
       line.current = L.polyline(scenario.route.map(p => [p.lat, p.lng]), { color: "#35e0a1", weight: 3, opacity: .85, dashArray: "2 9" }).addTo(m);
     });
     return () => { cancelled = true; };
-  }, [patch, scenario.appearance, scenario.position, scenario.route, scenario.status, scenario.zoom]);
+  }, [patch, profileId, scenario.appearance, scenario.position, scenario.route, scenario.status, scenario.zoom]);
 
   useEffect(() => {
     if (!map.current || !marker.current) return;
     import("leaflet").then(L => {
       marker.current?.setLatLng([position.lat, position.lng]);
-      marker.current?.setIcon(trackerIcon(L, scenario.appearance, scenario.status, angle));
+      marker.current?.setIcon(trackerIcon(L, scenario.appearance, scenario.status, angle, profileId));
       line.current?.setLatLngs(scenario.route.map(p => [p.lat, p.lng]));
       if (line.current) {
         if (routeVisible) line.current.addTo(map.current!);
         else line.current.remove();
       }
     });
-  }, [position, scenario.route, scenario.appearance, scenario.status, angle, routeVisible]);
+  }, [position, scenario.route, scenario.appearance, scenario.status, angle, routeVisible, profileId]);
 
   useEffect(() => {
     const refresh = () => {
@@ -183,15 +190,19 @@ export default function VectorApp() {
       lastFrame.current = performance.now();
       const frame = (now: number) => {
         const delta = (now - lastFrame.current) / 1000; lastFrame.current = now;
-        const duration = Math.max(1, (scenario.routeDistanceMeters ?? routeDistance(scenario.route)) / Math.max(.3, scenario.speed / 3.6));
-        setProgress(p => { const next = p + delta / duration; if (next >= 1) { if (scenario.loop) return 0; setPlaying(false); return 1; } return next; });
+        const distance = scenario.routeDistanceMeters ?? routeDistance(scenario.route);
+        setProgress(p => {
+          const speed = scenario.speedMode === "adaptive" ? adaptiveSpeedKmh(scenario.route, p, scenario.adaptiveSpeedPreset) : scenario.speed;
+          const next = p + delta * Math.max(.3, speed / 3.6) / Math.max(1, distance);
+          if (next >= 1) { if (scenario.loop) return 0; setPlaying(false); return 1; } return next;
+        });
         setUpdated(0); animation.current = requestAnimationFrame(frame);
       };
       animation.current = requestAnimationFrame(frame);
     };
     const delayTimer = setTimeout(run, delay * 1000);
     return () => { clearTimeout(delayTimer); if (animation.current) cancelAnimationFrame(animation.current); };
-  }, [playing, scenario.route, scenario.speed, scenario.loop, scenario.routeDistanceMeters, delay]);
+  }, [playing, scenario.route, scenario.speed, scenario.speedMode, scenario.adaptiveSpeedPreset, scenario.loop, scenario.routeDistanceMeters, delay]);
   useEffect(() => { const tick = window.setInterval(() => setUpdated(v => v + 1), 1000); return () => clearInterval(tick); }, []);
 
   const center = useCallback(() => map.current?.flyTo([position.lat, position.lng], Math.max(map.current.getZoom(), 14), { duration: .6 }), [position]);
@@ -360,7 +371,7 @@ export default function VectorApp() {
           {statusVisible && <aside className={`status-card ${statusTone}`} data-testid="tracker-status">
             <div className="eyebrow"><span><i /> {scenario.status}</span><span>GPS / LIVE</span></div><h2>{scenario.trackerName}</h2>
             <div className="coords">{position.lat.toFixed(6)}, {position.lng.toFixed(6)}</div>
-            <div className="metrics"><div><span>Speed</span><b>{playing ? scenario.speed : 0}<small> km/h</small></b></div><div><span>Heading</span><b>{Math.round(angle)}°</b></div><div><span>Battery</span><b>{scenario.battery}<small>%</small></b></div><div><span>Signal</span><b>{scenario.signal}</b></div></div>
+            <div className="metrics"><div><span>Speed</span><b>{currentSpeed}<small> km/h</small></b></div><div><span>Heading</span><b>{Math.round(angle)}°</b></div><div><span>Battery</span><b>{scenario.battery}<small>%</small></b></div><div><span>Signal</span><b>{scenario.signal}</b></div></div>
             <div className="updated"><span>Last update</span><b>{scenario.status === "Offline" ? "4 min ago" : updated < 2 ? "Just now" : `${updated}s ago`}</b></div>
           </aside>}
           {!presenter && <div className="simulation-bar" data-testid="simulation-bar">
@@ -396,14 +407,16 @@ export default function VectorApp() {
               </details>
               <SectionLabel>Coordinate route</SectionLabel><label>Route coordinates<textarea rows={5} value={routeText} onChange={e => setRouteText(e.target.value)} /></label><button className="primary" onClick={applyRouteText}>Apply coordinate route</button>
               <div className="route-stats"><span><b>{scenario.route.length}</b> points</span><span><b>{formatDistance(distanceMeters)}</b> length</span><span><b>{Math.round(simulationSeconds)}s</b> simulation</span></div>
-              <div className="two-col"><label>Speed (km/h)<input type="number" min="1" max="200" value={scenario.speed} onChange={e => patch({ speed: +e.target.value })} /></label><label>Start delay<input type="number" min="0" max="30" value={delay} onChange={e => setDelay(+e.target.value)} /></label></div>
+              <label className="check speed-mode"><input type="checkbox" checked={scenario.speedMode === "adaptive"} onChange={e => patch({ speedMode: e.target.checked ? "adaptive" : "set" })} /> Adaptive speed</label>
+              {scenario.speedMode === "adaptive" ? <label>Driving pace<select value={scenario.adaptiveSpeedPreset} onChange={e => patch({ adaptiveSpeedPreset: e.target.value as AdaptiveSpeedPreset })}><option>Slow</option><option>Normal</option><option>Fast</option></select><small className="field-help">Varies naturally with acceleration, braking and route curvature.</small></label> : <label>Set speed (km/h)<input type="number" min="1" max="200" value={scenario.speed} onChange={e => patch({ speed: +e.target.value })} /></label>}
+              <label>Start delay<input type="number" min="0" max="30" value={delay} onChange={e => setDelay(+e.target.value)} /></label>
               <div className="split"><button className="secondary" onClick={fitRoute}>Fit Route in View</button><button className="secondary" onClick={() => { patch({ route: [], routeDistanceMeters: 0 }); setRouteText(""); setProgress(0); }}>Clear Route</button></div>
               <label className="check"><input type="checkbox" checked={routeVisible} onChange={e => setRouteVisible(e.target.checked)} /> Show route trace</label><label className="check"><input type="checkbox" checked={scenario.loop} onChange={e => patch({ loop: e.target.checked })} /> Loop continuously</label>
             </>}
             {activeTab === "appearance" && <>
               <PanelTitle kicker="Visual identity" title={labels.trackerAppearance} text={`The tracker asset is separate from the permanent ${profile.name} brand.`} />
-              <div className="appearance-preview"><TrackerPreview appearance={scenario.appearance} /></div>
-              <SectionLabel>Standard icons</SectionLabel><div className="icon-grid">{iconChoices.map(icon => <button key={icon.id} className={scenario.appearance.standardIcon === icon.id && !scenario.appearance.customIcon ? "active" : ""} onClick={() => patchAppearance({ standardIcon: icon.id, customIcon: undefined })} title={icon.label}><span className="icon-mask" style={{ "--icon-url": `url(/tracker-icons/${icon.id}.svg)` } as React.CSSProperties} /><small>{icon.label}</small></button>)}</div>
+              <div className="appearance-preview"><TrackerPreview appearance={scenario.appearance} profileId={profileId} /></div>
+              <SectionLabel>{profile.name} icons</SectionLabel><div className="icon-grid">{iconChoices.map(icon => <button key={icon.id} className={scenario.appearance.standardIcon === icon.id && !scenario.appearance.customIcon ? "active" : ""} onClick={() => patchAppearance({ standardIcon: icon.id, customIcon: undefined })} title={`${icon.label} · ${profile.name}`}><span className="icon-mask" style={{ "--icon-url": `url(${iconAsset(profileId, icon.id)})` } as React.CSSProperties} /><small>{icon.label}</small></button>)}</div>
               <label className="upload">Upload tracker icon<input type="file" accept=".png,.jpg,.jpeg,.webp,.svg" onChange={e => uploadIcon(e.target.files?.[0])} /></label>
               {scenario.appearance.customIcon && <button className="secondary full danger-outline" onClick={removeUploadedIcon}>Remove Uploaded Icon</button>}
               <button className="secondary full" onClick={resetAppearance}>Reset Tracker Appearance</button>
@@ -455,13 +468,13 @@ function ProfilePicker({ value, onChange, expanded = false }: { value: Interface
   return <div className={`profile-picker ${expanded ? "expanded" : ""}`} role="group" aria-label="Interface Profile">{PROFILE_ORDER.map((id, index) => <button key={id} className={value === id ? "active" : ""} aria-pressed={value === id} onClick={() => onChange(id)} title={`${INTERFACE_PROFILES[id].name} (Shift+${index + 1})`}><img src={INTERFACE_PROFILES[id].mark} alt="" /><span>{INTERFACE_PROFILES[id].shortName}</span></button>)}</div>;
 }
 function formatPoint(value?: Coordinates | string) { return !value ? "" : typeof value === "string" ? value : `${value.lat}, ${value.lng}`; }
-function TrackerPreview({ appearance }: { appearance: Appearance }) {
-  return <div className="preview-icon" style={{ opacity: appearance.opacity, transform: `rotate(${appearance.rotation}deg)` }}>{appearance.customIcon ? <img src={appearance.customIcon} alt="Uploaded tracker" /> : <span className="icon-mask" style={{ "--icon-url": `url(/tracker-icons/${appearance.standardIcon}.svg)` } as React.CSSProperties} />}</div>;
+function TrackerPreview({ appearance, profileId = "vector" }: { appearance: Appearance; profileId?: InterfaceProfileId }) {
+  return <div className="preview-icon" style={{ opacity: appearance.opacity, transform: `rotate(${appearance.rotation}deg)` }}>{appearance.customIcon ? <img src={appearance.customIcon} alt="Uploaded tracker" /> : <span className="icon-mask" style={{ "--icon-url": `url(${iconAsset(profileId, appearance.standardIcon)})` } as React.CSSProperties} />}</div>;
 }
-function trackerIcon(L: typeof import("leaflet"), appearance: Appearance, status: TrackerStatus, angle: number) {
+function trackerIcon(L: typeof import("leaflet"), appearance: Appearance, status: TrackerStatus, angle: number, profileId: InterfaceProfileId) {
   const color = status === "Offline" || status === "Signal Lost" ? "#ff5c6c" : status === "Weak Signal" || status === "Low Battery" ? "#ffb84d" : "#35e0a1";
   const canPulse = appearance.pulse && status !== "Offline";
-  const uploaded = appearance.customIcon ? `<img src="${appearance.customIcon}" alt="">` : `<span class="tracker-svg" style="--icon-url:url(/tracker-icons/${appearance.standardIcon}.svg)"></span>`;
+  const uploaded = appearance.customIcon ? `<img src="${appearance.customIcon}" alt="">` : `<span class="tracker-svg" style="--icon-url:url(${iconAsset(profileId, appearance.standardIcon)})"></span>`;
   return L.divIcon({
     className: "vector-marker-host", iconSize: [appearance.size * 3, appearance.size * 3], iconAnchor: [appearance.size * 1.5, appearance.size * 1.5],
     html: `<div class="marker-anchor" style="--size:${appearance.size}px;--anchor-x:${appearance.anchorX}%;--anchor-y:${appearance.anchorY}%"><div class="marker-shell ${canPulse ? "pulse" : ""} ${appearance.ring ? "ring" : ""} ${appearance.shadow ? "shadow" : ""} ${status.toLowerCase().replaceAll(" ", "-")}" style="--marker:${color};--pulse-scale:${appearance.pulseSize};--pulse-opacity:${appearance.pulseOpacity};--pulse-duration:${appearance.pulseSpeed === "Fast" ? "1.15s" : appearance.pulseSpeed === "Slow" ? "2.25s" : "1.6s"};--pulse-width:${appearance.pulseIntensity === "Subtle" ? "1px" : appearance.pulseIntensity === "Normal" ? "2px" : "3px"};opacity:${appearance.opacity};transform:translate(-50%,-50%) rotate(${appearance.rotation + (appearance.directionRotation ? angle : 0)}deg)">${uploaded}<i class="pulse-ring one"></i><i class="pulse-ring two"></i></div></div>`,

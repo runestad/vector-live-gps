@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_APPEARANCE, interpolatePosition, isPulseActive, isValidCoordinates, parseCoordinateLine, routeDistance } from "../app/utils";
+import { adaptiveSpeedKmh, DEFAULT_APPEARANCE, interpolatePosition, isPulseActive, isValidCoordinates, parseCoordinateLine, routeDistance } from "../app/utils";
 
 test("validates coordinate limits", () => {
   assert.equal(isValidCoordinates(59.9, 10.7), true);
@@ -17,4 +17,9 @@ test("pulse settings respect status", () => {
   assert.equal(isPulseActive(DEFAULT_APPEARANCE, "Active"), true);
   assert.equal(isPulseActive(DEFAULT_APPEARANCE, "Offline"), false);
   assert.equal(isPulseActive({ ...DEFAULT_APPEARANCE, pulse: false }, "Moving"), false);
+});
+test("adaptive speed varies by pace and route curvature", () => {
+  const route = [{ lat: 59.91, lng: 10.71 }, { lat: 59.92, lng: 10.72 }, { lat: 59.92, lng: 10.74 }, { lat: 59.94, lng: 10.74 }];
+  assert.ok(adaptiveSpeedKmh(route, .5, "Fast") > adaptiveSpeedKmh(route, .5, "Slow"));
+  assert.notEqual(adaptiveSpeedKmh(route, .1, "Normal"), adaptiveSpeedKmh(route, .5, "Normal"));
 });

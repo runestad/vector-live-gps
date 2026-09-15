@@ -1,4 +1,4 @@
-import type { Appearance, Coordinates, Scenario } from "./types";
+import type { AdaptiveSpeedPreset, Appearance, Coordinates, Scenario } from "./types";
 
 export const DEFAULT_APPEARANCE: Appearance = {
   size: 46, opacity: 1, rotation: 0, anchorX: 50, anchorY: 50,
@@ -60,6 +60,25 @@ export function headingAtProgress(route: Coordinates[], progress: number) {
   return bearing(a, b);
 }
 
+const adaptiveCruise: Record<AdaptiveSpeedPreset, number> = { Slow: 34, Normal: 62, Fast: 108 };
+
+export function adaptiveSpeedKmh(route: Coordinates[], progress: number, preset: AdaptiveSpeedPreset) {
+  const cruise = adaptiveCruise[preset];
+  if (route.length < 2) return 0;
+  const before = headingAtProgress(route, Math.max(0, progress - .012));
+  const ahead = headingAtProgress(route, Math.min(1, progress + .018));
+  const turn = Math.abs(((ahead - before + 540) % 360) - 180);
+  const cornerFactor = Math.max(.36, 1 - turn / 145);
+  const roadRhythm = .92 + .08 * Math.sin(progress * Math.PI * 10) + .04 * Math.sin(progress * Math.PI * 27);
+  const launch = Math.min(1, .45 + progress * 9);
+  const arrival = Math.min(1, .4 + (1 - progress) * 12);
+  return Math.max(8, Math.round(cruise * cornerFactor * roadRhythm * launch * arrival));
+}
+
+export function estimatedAdaptiveSpeedKmh(preset: AdaptiveSpeedPreset) {
+  return adaptiveCruise[preset] * .82;
+}
+
 export function isPulseActive(appearance: Appearance, status: Scenario["status"]) {
   return appearance.pulse && status !== "Offline";
 }
@@ -78,6 +97,8 @@ export function normalizeScenario(value: Partial<Scenario>, fallbackId: string):
     route: value.route.filter(p => isValidCoordinates(p.lat, p.lng)),
     routeDistanceMeters: Number(value.routeDistanceMeters) || routeDistance(value.route),
     speed: Number(value.speed) || 42,
+    speedMode: value.speedMode === "set" ? "set" : "adaptive",
+    adaptiveSpeedPreset: value.adaptiveSpeedPreset === "Slow" || value.adaptiveSpeedPreset === "Fast" ? value.adaptiveSpeedPreset : "Normal",
     loop: Boolean(value.loop),
     status: value.status ?? "Active",
     battery: Number.isFinite(value.battery) ? Number(value.battery) : 84,

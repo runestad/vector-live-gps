@@ -24,3 +24,10 @@ test("twelve standard tracker SVG assets exist", () => {
   const files = fs.readdirSync(new URL("../public/tracker-icons/", import.meta.url)).filter(f => f.endsWith(".svg"));
   assert.ok(files.length >= 12);
 });
+test("profile-specific KARTSPOR and TrackPoint marker sets exist", () => {
+  for (const profile of ["kartspor", "trackpoint-2002"]) {
+    for (const icon of ["beacon", "vehicle", "arrow", "dot"]) {
+      assert.equal(fs.existsSync(new URL(`../public/tracker-icons/${profile}/${icon}.svg`, import.meta.url)), true);
+    }
+  }
+});

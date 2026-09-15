@@ -29,7 +29,7 @@ test("shortcuts are ignored in form and editable targets", () => {
 });
 
 test("profile preference migrates safely and scenario profile is opt-in", () => {
-  const demo: Scenario = { id: "demo", name: "Demo", builtIn: true, position: { lat: 1, lng: 2 }, route: [], speed: 1, loop: false, status: "Active", battery: 80, signal: "Good", trackerName: "A", deviceId: "1", vehicle: "", registration: "", note: "", appearance: DEFAULT_APPEARANCE, zoom: 10 };
+  const demo: Scenario = { id: "demo", name: "Demo", builtIn: true, position: { lat: 1, lng: 2 }, route: [], speed: 1, speedMode: "adaptive", adaptiveSpeedPreset: "Normal", loop: false, status: "Active", battery: 80, signal: "Good", trackerName: "A", deviceId: "1", vehicle: "", registration: "", note: "", appearance: DEFAULT_APPEARANCE, zoom: 10 };
   const migrated = migrateStoredData(JSON.stringify({ version: 2, scenarios: [], current: demo, settings: { interfaceProfile: "kartspor", saveProfileWithScenario: true } }), null, [demo]);
   assert.equal(migrated.settings.interfaceProfile, "kartspor");
   assert.equal(migrated.settings.saveProfileWithScenario, true);
@@ -41,7 +41,7 @@ test("profile preference migrates safely and scenario profile is opt-in", () => 
 
 test("profile changes invalidate map without resetting progress or simulation", () => {
   const component = fs.readFileSync(new URL("../app/VectorApp.tsx", import.meta.url), "utf8");
-  assert.match(component, /\[presenter, profileId\]/);
+  assert.match(component, /\[presenter, profileId, panelState\]/);
   assert.match(component, /data-interface-profile=\{profileId\}/);
   assert.match(component, /\["Digit1", "Digit2", "Digit3"\]/);
   const switchBlock = component.match(/const switchProfile = useCallback\([^]*?\}, \[\]\);/)?.[0] ?? "";

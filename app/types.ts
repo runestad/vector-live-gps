@@ -8,6 +8,8 @@ export type StandardIcon =
   | "phone" | "arrow" | "dot" | "magnetic-tracker" | "boat" | "bicycle";
 export type PulseIntensity = "Subtle" | "Normal" | "Strong";
 export type PulseSpeed = "Slow" | "Normal" | "Fast";
+export type SpeedMode = "adaptive" | "set";
+export type AdaptiveSpeedPreset = "Slow" | "Normal" | "Fast";
 export type MobilePanelState = "collapsed" | "half" | "expanded";
 export type PresenterLock = "off" | "triple" | "triple-confirm" | "long-press";
 export type Appearance = {
@@ -35,6 +37,8 @@ export type Scenario = {
   route: Coordinates[];
   routeDistanceMeters?: number;
   speed: number;
+  speedMode: SpeedMode;
+  adaptiveSpeedPreset: AdaptiveSpeedPreset;
   loop: boolean;
   status: TrackerStatus;
   battery: number;
